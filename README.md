@@ -1,3 +1,5 @@
+[English](README.en.md) | 中文
+
 # own-reader（讀書）
 
 在浏览器里读自己的 Calibre 书库：划线、评注、选中一段直接问 AI，所有阅读行为写进本机的事件库。服务端跑在自己的 Mac 上，手机、平板、墨水屏用浏览器打开同一个页面；Mac 上另有一个 WKWebView 外壳 App「讀書」。
