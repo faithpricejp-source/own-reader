@@ -30,7 +30,7 @@ DB_PATH = DATA_DIR / "reader.sqlite"
 PORT = int(os.environ.get("OWN_READER_PORT", "8460"))
 STATIC = {"/web/": ROOT / "web", "/vendor/": ROOT / "vendor"}
 EVENT_TYPES = {"open", "progress", "highlight", "note", "ask", "feedback", "delete",
-               "rec_feedback", "rec_comment", "rec_memo_edit", "book_feedback", "search"}
+               "rec_feedback", "rec_comment", "rec_memo_edit", "book_feedback", "search", "ink"}
 
 SYSTEM_PROMPT = """你是用户的伴读助手。用户在读一本书时选中了一段文字并提问。
 回答规则：
@@ -178,6 +178,7 @@ def book_state(book_id: int) -> dict:
     progress = None
     progress_xp = None
     highlights: dict[int, dict] = {}
+    inks: dict[str, dict] = {}  # 安卓原生版的手写批注，按设备端 ink_id
     asks = []
     for r in rows:
         p = json.loads(r["payload"]) if r["payload"] else {}
@@ -189,6 +190,16 @@ def book_state(book_id: int) -> dict:
                 progress_xp = {**p, "ts": r["ts"], "device": r["device"]}
             elif r["cfi"]:
                 progress = {"cfi": r["cfi"], **p, "ts": r["ts"], "device": r["device"]}
+        elif r["type"] == "ink" and isinstance(p, dict) and p.get("ink_id"):
+            inks[p["ink_id"]] = {"id": r["id"], "ink_id": p["ink_id"], "strokes": p.get("strokes") or [],
+                                 "context": p.get("context") or "", "chapter": p.get("chapter"), "pos": p.get("pos"),
+                                 "pos_kind": p.get("pos_kind"), "ts": r["ts"], "recognized": None,
+                                 "recognized_source": None}
+        elif r["type"] == "note" and isinstance(p, dict) and p.get("ink_id"):
+            if p["ink_id"] in inks:  # 手写的识别文字（识别引擎或阅读器上手改），后到的为准
+                inks[p["ink_id"]].update(recognized=r["text"], recognized_source=p.get("source"))
+        elif r["type"] == "delete" and isinstance(p, dict) and p.get("ink_id"):
+            inks.pop(p["ink_id"], None)
         elif r["type"] == "delete" and isinstance(p, dict) and p.get("pos_kind") == "crengine" and "target_id" not in p:
             # 安卓原生版删划线：设备不知道事件号，按位置删掉此刻同位置的划线（之后重划的不受影响）
             for hid in [k for k, h in highlights.items() if _same_xp(h, p)]:
@@ -211,7 +222,8 @@ def book_state(book_id: int) -> dict:
                          "model": p.get("model"), "ts": r["ts"],
                          "pos": p.get("pos"), "pos_end": p.get("pos_end"), "pos_kind": p.get("pos_kind"),
                          "chapter": p.get("chapter"), "geo": p.get("geo")})
-    return {"progress": progress, "progress_xp": progress_xp, "highlights": list(highlights.values()), "asks": asks}
+    return {"progress": progress, "progress_xp": progress_xp, "highlights": list(highlights.values()), "asks": asks,
+            "inks": list(inks.values())}
 
 
 def _has_ext(c) -> bool:
@@ -572,6 +584,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/events":
                 eid = add_event(req.get("device"), req.get("book_id"), req["type"], req.get("cfi"),
                                 req.get("text"), req.get("payload"))
+                if req["type"] == "ink":  # 手写批注：叫醒识别线程（引擎为 off 时线程空转，不调用模型）
+                    import ink
+                    ink.kick()
                 return self._json({"id": eid})
             if path in ("/api/recs/generate", "/api/recs/distill"):
                 started = _start_rec_job(path.rsplit("/", 1)[1])
@@ -711,6 +726,11 @@ def main():
         batchjobs.resume()
     except Exception as e:  # noqa: BLE001
         print(f"batch resume failed: {e}", flush=True)
+    try:
+        import ink
+        ink.start()
+    except Exception as e:  # noqa: BLE001
+        print(f"ink recognizer failed to start: {e}", flush=True)
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"own-reader on http://127.0.0.1:{PORT}  db={DB_PATH}", flush=True)
     srv.serve_forever()

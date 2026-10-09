@@ -433,7 +433,7 @@ export class View extends HTMLElement {
         if (!range) return baseCFI
         // own-reader: 译文以 .or-tr 追加在原文段落末尾；位置落在译文里时挪到译文前，CFI 只指向原文节点
         // own-reader 2026-10-09：精读批注 .or-gl 同理
-        const tr = n => (n.nodeType === 1 ? n : n.parentElement)?.closest?.('.or-tr, .or-gl')
+        const tr = n => (n.nodeType === 1 ? n : n.parentElement)?.closest?.('.or-tr, .or-gl, .or-ink')
         const s = tr(range.startContainer), e = tr(range.endContainer)
         if (s || e) {
             range = range.cloneRange()

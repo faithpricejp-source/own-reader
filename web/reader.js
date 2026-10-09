@@ -228,6 +228,7 @@ async function main() {
     if (h.cfi) marks.set(h.cfi, { kind: 'hl', ...h })
     else if (h.pos_kind === 'crengine' && h.text) xpPending.push(h)
   }
+  for (const k of (state.inks || [])) if (k.pos_kind !== 'pdf') inkPending.push(k)
   for (const a of state.asks) if (a.cfi && !marks.has(a.cfi)) marks.set(a.cfi, { kind: 'ask', ...a })
 
   const blob = await fetch(`/api/books/${bookId}/file`).then(r => {
@@ -297,7 +298,7 @@ const trDocs = new Map() // index -> doc
 // div 只取叶子块（2026-10-09 补，与 server/bilingual.py、精读批注一致）
 const TR_SEL = 'p, li, blockquote, h1, h2, h3, h4, h5, h6, dd, dt, figcaption, div'
 const trBlocks = doc => [...doc.querySelectorAll(TR_SEL)]
-  .filter(el => !el.querySelector(TR_SEL) && !el.closest('.or-tr, .or-gl') && el.textContent.trim().length > 1)
+  .filter(el => !el.querySelector(TR_SEL) && !el.closest('.or-tr, .or-gl, .or-ink') && el.textContent.trim().length > 1)
 const trText = rawText // 去掉插进去的译文与精读批注再取原文
 const TR_CSS = `.or-tr { display: block; margin-top: .3em; font-size: .94em; text-indent: 0; text-align: justify;
   color: ${desk ? '#6b625a' : '#000'}; } .or-tr .or-loc { font-size: .75em; opacity: .7; }
@@ -420,6 +421,8 @@ $('#b-dos').onclick = async () => {
 // 所以序号对上的节里任何长度都认，别的节里只认 8 个字以上的原文（太短容易认错地方）。
 const xpPending = []
 const xpResolved = new Map() // 划线事件号 -> cfi（笔记列表跳转用）
+const inkPending = []
+const inkResolved = new Map() // ink_id -> cfi（笔记列表跳转用）
 function placeXpHighlights(doc, index) {
   if (!xpPending.length) return
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
@@ -452,9 +455,56 @@ function placeXpHighlights(doc, index) {
   }
 }
 
+// ---- 安卓原生版的手写批注：按手写旁边的原文找到段落，在段落末尾画出笔迹和识别出的文字 ----
+const INK_CSS = `.or-ink { display: block; margin: .4em 0 .2em; padding: .2em .6em; border-left: 2px solid ${desk ? '#a3302a' : '#000'};
+  text-indent: 0; text-align: left; font-size: .9em; } .or-ink svg { display: block; max-width: 100%; height: auto; }
+  .or-ink .or-ink-t { margin-top: .2em; } .or-ink .or-ink-l { font-size: .75em; opacity: .6; }`
+function inkSVG(strokes, maxW = 420) {
+  const xs = [], ys = []
+  for (const s of strokes) for (let i = 0; i + 2 < s.length; i += 3) { xs.push(s[i]); ys.push(s[i + 1]) }
+  if (!xs.length) return ''
+  const pad = 6, x0 = Math.min(...xs) - pad, y0 = Math.min(...ys) - pad
+  const w = Math.max(...xs) - x0 + pad, h = Math.max(...ys) - y0 + pad
+  const k = Math.min(1, maxW / w)
+  const paths = strokes.map(s => {
+    let d = ''
+    for (let i = 0; i + 2 < s.length; i += 3) d += `${i ? 'L' : 'M'}${(s[i] - x0).toFixed(1)} ${(s[i + 1] - y0).toFixed(1)}`
+    return `<path d="${d}"/>`
+  }).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w.toFixed(0)} ${h.toFixed(0)}" width="${(w * k).toFixed(0)}" height="${(h * k).toFixed(0)}"
+    fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`
+}
+function placeInks(doc, index) {
+  if (!inkPending.length) return
+  if (!doc.getElementById('or-ink-css')) {
+    const st = doc.createElement('style'); st.id = 'or-ink-css'; st.textContent = INK_CSS; doc.head?.append(st)
+  }
+  const blocks = trBlocks(doc).map(el => [el, rawText(el).replace(/\s+/g, '')])
+  for (let k = inkPending.length - 1; k >= 0; k--) {
+    const ink = inkPending[k]
+    // 上下文是「锚点所在行 + 上下各一行」：先用中间那行（锚点行），再用其他行；太短的行不用
+    const lines = (ink.context || '').split('\n').map(l => l.replace(/\s+/g, ''))
+    const order = [lines[Math.floor(lines.length / 2)], ...lines].filter(l => l && l.length >= 6)
+    let hit = null
+    for (const line of order) { hit = blocks.find(([, t]) => t.includes(line))?.[0]; if (hit) break }
+    if (!hit) continue
+    const box = doc.createElement('div')
+    box.className = 'or-ink'
+    box.innerHTML = `<div class="or-ink-l">✎ Boox 手写</div>${inkSVG(ink.strokes)}<div class="or-ink-t">${
+      ink.recognized ? esc(ink.recognized) : '<span style="opacity:.6">（尚未识别）</span>'}</div>`
+    hit.append(box)
+    try {
+      const r = doc.createRange(); r.selectNodeContents(hit); r.collapse(true)
+      inkResolved.set(ink.ink_id, view.getCFI(index, r))
+    } catch (e) { console.warn('ink cfi', e) }
+    inkPending.splice(k, 1)
+  }
+}
+
 function onLoad({ detail: { doc, index } }) {
   trDocs.set(index, doc)
   placeXpHighlights(doc, index)
+  placeInks(doc, index)
   $('#b-tr').classList.toggle('on', trOn)
   trSection(doc, index)
   gloss.section(doc, index)
@@ -829,6 +879,11 @@ $('#b-notes').onclick = async () => {
   const s = await api(`/api/books/${bookId}/state`)
   const rows = [
     ...s.highlights.map(h => ({ ts: h.ts, cfi: h.cfi || xpResolved.get(h.id) || '', html: `${h.pos_kind === 'crengine' ? '<div class="muted">Boox</div>' : ''}<div class="quote">${esc(h.text)}</div>${h.note ? `<div>${esc(h.note)}</div>` : ''}` })),
+    ...(s.inks || []).map(k => ({
+      ts: k.ts,
+      cfi: inkResolved.get(k.ink_id) || '',
+      html: `<div class="muted">Boox 手写${k.chapter ? ' · ' + esc(k.chapter) : ''}</div>${inkSVG(k.strokes, 260)}<div>${k.recognized ? esc(k.recognized) : '<span class="muted">（尚未识别）</span>'}</div>`,
+    })),
     ...s.asks.map(a => ({ ts: a.ts, cfi: a.cfi, html: `<div class="quote">${esc(a.selection)}</div><div class="q">问：${esc(a.question || '解释这段')}</div><div class="answer">${md(a.answer)}</div><div class="muted">${esc(a.model)}</div>` })),
     ...(s.imported || []).map(n => ({ ts: n.created_ts || '', cfi: '', html: `<div class="muted">${n.source === 'weread' ? '微信读书' : esc(n.source)}${n.chapter ? ' · ' + esc(n.chapter) : ''}</div>${n.quote ? `<div class="quote">${esc(n.quote)}</div>` : ''}${n.text ? `<div class="answer">${md(n.text)}</div>` : ''}` })),
   ].sort((a, b) => b.ts.localeCompare(a.ts))

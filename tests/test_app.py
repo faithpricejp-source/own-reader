@@ -52,7 +52,7 @@ def test_add_event_rejects_unknown_type(events):
     with pytest.raises(ValueError, match="bad event type nope"):
         app.add_event("dev", 1, "nope")
     assert app.EVENT_TYPES == {"open", "progress", "highlight", "note", "ask", "feedback", "delete",
-                              "rec_feedback", "rec_comment", "rec_memo_edit", "book_feedback", "search"}
+                              "rec_feedback", "rec_comment", "rec_memo_edit", "book_feedback", "search", "ink"}
 
 
 def test_recent_searches_dedup_newest_first_per_tab(events):
@@ -130,7 +130,7 @@ def test_list_books_query_hits_title_or_author(cal):
 # book_state
 # --------------------------------------------------------------------------- #
 def test_book_state_empty(events):
-    assert app.book_state(42) == {"progress": None, "progress_xp": None, "highlights": [], "asks": []}
+    assert app.book_state(42) == {"progress": None, "progress_xp": None, "highlights": [], "asks": [], "inks": []}
 
 
 def test_book_state_full_cycle(events):

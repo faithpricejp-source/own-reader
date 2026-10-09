@@ -6,13 +6,13 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '
 export const GL_SEL = 'p, li, blockquote, h1, h2, h3, h4, h5, h6, dd, dt, figcaption, div'
 // 段落原文：去掉我们插进去的译文与批注（否则哈希变了、还会把批注当原文再批一遍）
 export const rawText = el => {
-  if (!el.querySelector('.or-tr, .or-gl')) return el.textContent.replace(/\s+/g, ' ').trim()
+  if (!el.querySelector('.or-tr, .or-gl, .or-ink')) return el.textContent.replace(/\s+/g, ' ').trim()
   const c = el.cloneNode(true)
-  c.querySelectorAll('.or-tr, .or-gl').forEach(n => n.remove())
+  c.querySelectorAll('.or-tr, .or-gl, .or-ink').forEach(n => n.remove())
   return c.textContent.replace(/\s+/g, ' ').trim()
 }
 export const glBlocks = doc => [...doc.querySelectorAll(GL_SEL)]
-  .filter(el => !el.querySelector(GL_SEL) && !el.closest('.or-tr, .or-gl') && rawText(el).length > 1)
+  .filter(el => !el.querySelector(GL_SEL) && !el.closest('.or-tr, .or-gl, .or-ink') && rawText(el).length > 1)
 
 const css = desk => `.or-gl { display: block; margin: .35em 0 .2em; padding: .25em .6em; font-size: .86em; line-height: 1.55;
   text-indent: 0; text-align: left; border-left: 2px solid ${desk ? '#c9a27a' : '#000'};
