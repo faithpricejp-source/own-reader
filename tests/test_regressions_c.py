@@ -38,7 +38,7 @@ def test_b1_book_state_delete_with_null_payload_is_skipped(events):
     app.add_event("d", 5, "progress", "cfi-p", None, {"fraction": 0.3})
     st = app.book_state(5)
     assert [x["id"] for x in st["highlights"]] == [h]
-    assert {k: v for k, v in st["progress"].items() if k != "ts"} == {"cfi": "cfi-p", "fraction": 0.3}
+    assert {k: v for k, v in st["progress"].items() if k != "ts"} == {"cfi": "cfi-p", "fraction": 0.3, "device": "d"}
 
 
 # --------------------------------------------------------------------------- #
