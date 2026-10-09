@@ -50,9 +50,30 @@ All three layers are written by AI under the same principles: facts from outside
 
 The `claude_api` backend connects directly to the Claude API using the official `anthropic` SDK (`pip install anthropic`), pay-as-you-go, and **you must supply your own API key**: put it in a file containing only the key on one line, and point `OWN_READER_ANTHROPIC_KEY_FILE` at it (default `~/.config/anthropic/api-key.txt`). Features that use it: close-reading glosses (the default backend; can be switched to another backend with `OWN_READER_GLOSS_BACKEND`; on failure it falls back to `OWN_READER_FALLBACK_BACKEND`), per-chapter guides, the whole-book guide, and whole-book batch translation.
 
-- **Monthly cap gate**: every call records its estimated cost at list price in a local ledger (the `api_spend` table in `reader.sqlite`); once the month's total reaches `OWN_READER_API_MONTHLY_CAP` (default US$20), calls are refused; whole-book batch jobs and the whole-book guide are estimated before submission and not submitted if they would exceed the cap. The ledger is a local estimate, not the official bill — please also set a spend limit in the Anthropic Console.
+- **Credit-period cap**: every call records its estimated cost at list price in a local ledger (the `api_spend` table in `reader.sqlite`); once the period's total reaches `OWN_READER_API_MONTHLY_CAP` (default US$20), calls are refused; whole-book batch jobs and the whole-book guide are estimated before submission and not submitted if they would exceed the cap. The period starts at 00:00 UTC on day `OWN_READER_CREDIT_DAY` of each month; the default is `1`, which is the calendar month. The ledger is a local estimate, not the official bill — please also set a spend limit in the Anthropic Console.
 - **Message Batches**: whole-book pre-runs (close-reading glosses, per-chapter guides, whole-book translation) use the batch API at half price, usually with results within an hour (at most 24 hours). Batches and each request's business data are stored in the `batch_job` table, and collection resumes automatically after a server restart; for paragraphs whose batch is in flight, turning to them on the reading page will not trigger a duplicate real-time request.
 - **Whole-book batch translation**: "整本批量翻译" (whole-book batch translation) in the "批" panel uses Sonnet to submit all of the book's not-yet-translated paragraphs as one Batch; results are written into the same paragraph translation cache (shared by real-time translation and the bilingual EPUB).
+
+## Annotated EPUB, Android native events, handwriting
+
+The Android app is not in this repository. own-reader only stores the events that app writes back, and shows them on the web reader.
+
+- **Annotated EPUB**: on top of the whole-book guide, the per-chapter guides and the close-reading glosses, this builds an offline EPUB (guide at the front, chapter guide at each chapter start, glosses under paragraphs). From the repository root:
+
+  ```
+  uv run --no-project --with markdown --with lxml python -I server/annotated_epub.py <calibre_id> [output path]
+  ```
+
+  With no output path it writes `<data dir>/annotated/<id> 导读版 [or<id>].epub`. The `[or<id>]` marker lets an external reader recognize the book. `markdown` is not added to `requirements.txt`; the command above pulls it with `uv run --with`.
+- **Android native positions**: the web reader uses EPUB CFI. The native reader uses two other position kinds. They do not overwrite CFI progress; both land in `progress_xp`, and progress carries `device`.
+  - `pos_kind=crengine`: an EPUB xpointer in `pos` / `pos_end`. Notes and deletes do not carry a server event id; they attach to or remove the highlight with that same position.
+  - `pos_kind=pdf`: `pos` looks like `pdfpage:<page>`, and a highlight also carries `quads`. Notes and deletes match `pos` + `pos_end` + `quads`, and never match a crengine highlight.
+  The web reader finds the quoted text in the section or on the PDF page and draws it. The notes list can jump there.
+- **Handwriting**: an `ink` event stores the strokes, and the web reader draws them under the matching paragraph. `OWN_READER_INK_ENGINE`:
+  - `off` (default): store and display only; no model is called.
+  - `openai`: `OWN_READER_INK_URL` and `OWN_READER_INK_MODEL`. own-reader POSTs `chat/completions` to any OpenAI-compatible endpoint, with the image as a data URI, using the standard library.
+  - `claude`: the existing Claude API (`llm.api_call`), model `OWN_READER_INK_CLAUDE_MODEL` (default `claude-sonnet-5-5`). The cost counts toward the credit-period cap above.
+- **Cross-site protection**: POST accepts only `Content-Type: application/json`, the body must be a JSON object, and `Content-Length` may not exceed 50MB. If `Origin` is present it must match `Host`. `Host` may only be `127.0.0.1`, `localhost`, `[::1]`, or a `*.ts.net` name. This server does not answer a CORS preflight, so a browser blocks cross-site JSON requests.
 
 ## Geographic annotation
 
@@ -115,7 +136,11 @@ Everything is via environment variables, or `config.conf` in the repository root
 | `OWN_READER_RECS_BACKEND` / `OWN_READER_LIBRARY_BACKEND` | `claude` | Backend for book recommendations / library scoring |
 | `OWN_READER_TRANSLATE_CHAIN` | `mt_free,mt_local` | Order of translation backends |
 | `OWN_READER_ANTHROPIC_KEY_FILE` | `~/.config/anthropic/api-key.txt` | Claude API key file (`claude_api` backend) |
-| `OWN_READER_API_MONTHLY_CAP` | `20` | Claude API monthly spend cap (US dollars, local estimate) |
+| `OWN_READER_API_MONTHLY_CAP` | `20` | Claude API spend cap per credit period (US dollars, local estimate) |
+| `OWN_READER_CREDIT_DAY` | `1` | Day of month the credit period starts (1–28; 1 = calendar month) |
+| `OWN_READER_INK_ENGINE` | `off` | Handwriting recognition: `off` / `openai` / `claude` |
+| `OWN_READER_INK_URL` / `OWN_READER_INK_MODEL` | empty | Compatible endpoint and model for the `openai` engine |
+| `OWN_READER_INK_CLAUDE_MODEL` | `claude-sonnet-5-5` | Model used by the `claude` engine |
 | `OWN_READER_GLOSS_BACKEND` | `claude_api` | Backend for close-reading glosses |
 | `OWN_READER_GEO_DIR` | `<data dir>/geo` | Gazetteer directory for geographic annotation |
 | `OWN_READER_TAXONOMY` | built-in generic categories | Custom category table; see `taxonomy.example.json` for the format |
@@ -124,7 +149,7 @@ Everything is via environment variables, or `config.conf` in the repository root
 
 There are no secrets in the repository. Each backend uses the credentials its own CLI is already logged in with, or the key file you specify.
 
-**What leaves your machine**: reading behavior itself (opening, page turns, dwell time, highlights, notes) is written only to local SQLite. But book recommendations, library scoring, and Chinese/English edition matching splice your reading history, highlights, thoughts and questions into prompts and send them to the AI backend you configured (default claude, i.e. a third-party server); translation sends the book's text to the configured translation backend; recommendation results are looked up at the WeChat Read store, Open Library and the National Diet Library (国立国会図書館). The **Claude API** (close-reading glosses, per-chapter guides, whole-book guide, whole-book batch translation) receives the book's text (for the whole-book guide, the entire book) and your reader profile; the whole-book guide also includes the titles of books you have read and taken notes on, and has Anthropic perform web searches on your behalf. **Geographic annotation** sends the selected passage plus its surrounding context to the backend used for questions, sends modern place-name lookups to OpenStreetMap Nominatim, and loads map tiles from OpenTopoMap / Esri. If you want everything to stay fully local, configure all backends as `local`, and do not use the Claude API features or geographic annotation.
+**What leaves your machine**: reading behavior itself (opening, page turns, dwell time, highlights, notes) is written only to local SQLite. But book recommendations, library scoring, and Chinese/English edition matching splice your reading history, highlights, thoughts and questions into prompts and send them to the AI backend you configured (default claude, i.e. a third-party server); translation sends the book's text to the configured translation backend; recommendation results are looked up at the WeChat Read store, Open Library and the National Diet Library (国立国会図書館). The **Claude API** (close-reading glosses, per-chapter guides, whole-book guide, whole-book batch translation) receives the book's text (for the whole-book guide, the entire book) and your reader profile; the whole-book guide also includes the titles of books you have read and taken notes on, and has Anthropic perform web searches on your behalf. **Geographic annotation** sends the selected passage plus its surrounding context to the backend used for questions, sends modern place-name lookups to OpenStreetMap Nominatim, and loads map tiles from OpenTopoMap / Esri. **Handwriting recognition**, when `OWN_READER_INK_ENGINE` is `openai` or `claude`, sends the stroke image and the nearby original text to that endpoint; `off` sends nothing. If you want everything to stay fully local, configure all backends as `local`, and do not use the Claude API features or geographic annotation.
 
 `POLICY_DRAFT` in `server/llm.py` restricts backends by data sensitivity: your notes, questions, reading records and reader profile are by default **not** sent to `free` (the OpenRouter free tier) or `gemini`; the book's text (for translation) may be sent to any backend. Adjust this table to your own trust boundaries.
 
@@ -133,7 +158,7 @@ There are no secrets in the repository. Each backend uses the credentials its ow
 - `<data dir>/reader.sqlite`: the event store (the single source of truth), plus derived tables: translation cache, close-reading gloss cache (`gloss_*`), whole-book guides (`book_dossier`), chapter segmentation (`chapter_seg`), Batch jobs (`batch_job`), the Claude API spend ledger (`api_spend`), library classification and scores, book recommendations, imported external notes, and a model-call audit log (`llm_calls`, which stores only lengths and metadata, not the prompt text).
 - `<data dir>/reader_profile.md`: the reader profile used by close-reading glosses and guides.
 - `<data dir>/geo/`: raw data for geographic annotation and `geo.sqlite` (downloaded and generated by you; see "Geographic annotation").
-- `<data dir>/booktext/`, `bilingual/`, `import/`: full-text paragraph cache, bilingual EPUBs, raw WeChat Read JSON cache.
+- `<data dir>/booktext/`, `bilingual/`, `annotated/`, `import/`: full-text paragraph cache, bilingual EPUBs, annotated EPUBs, raw WeChat Read JSON cache.
 - `<data dir>/profile.md`, `needs.md`, `should.md`, `positions.md`, `rec_memo.md`: the "about you" texts read by book recommendations and scoring; templates are generated on first run — edit them freely.
 - `<data dir>/fonts/`: ttf/otf files placed here appear in the reading page's font menu (`~/Library/Fonts` is also read).
 - The Calibre library is read-only and is never written to.

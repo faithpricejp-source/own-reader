@@ -50,9 +50,30 @@
 
 `claude_api` 后端用官方 `anthropic` SDK 直连 Claude API（`pip install anthropic`），按量付费，**需要自备 API key**：放进一个只有 key 一行的文件，用 `OWN_READER_ANTHROPIC_KEY_FILE` 指过去（默认 `~/.config/anthropic/api-key.txt`）。用它的功能：精读批注（默认后端，可用 `OWN_READER_GLOSS_BACKEND` 换成别的后端；失败时回落 `OWN_READER_FALLBACK_BACKEND`）、每章导读、全书导读、整本批量翻译。
 
-- **月上限闸**：每次调用按挂牌价把估算花费记进本地账本（`reader.sqlite` 的 `api_spend` 表），当月累计到 `OWN_READER_API_MONTHLY_CAP`（默认 20 美元）就拒绝调用；整本批量任务、全书导读在提交前先估算，会超上限就不提交。账本是本地估算，不是官方账单——请同时在 Anthropic Console 设好消费限额。
+- **额度周期上限**：每次调用按挂牌价把估算花费记进本地账本（`reader.sqlite` 的 `api_spend` 表），本额度周期累计到 `OWN_READER_API_MONTHLY_CAP`（默认 20 美元）就拒绝调用；整本批量任务、全书导读在提交前先估算，会超上限就不提交。周期起点是每月 `OWN_READER_CREDIT_DAY` 日 0 点（UTC），默认 `1`，即自然月。账本是本地估算，不是官方账单——请同时在 Anthropic Console 设好消费限额。
 - **Message Batches**：整本预跑（精读批注、每章导读、整本翻译）走批量接口，价格五折，通常一小时内出结果（最长 24 小时）。批次与每个请求的业务数据存在 `batch_job` 表，服务器重启后自动续收；批次在途的段落，阅读页翻到那里不会再重复实时请求。
 - **整本批量翻译**：「批」面板里「整本批量翻译」，用 Sonnet 把全书没翻过的段落一次提交成 Batch，结果写进同一份段落翻译缓存（实时翻译与双语 EPUB 共用）。
+
+## 导读版 EPUB、安卓原生事件、手写批注
+
+安卓 App 不在本仓库。下面只描述讀書在本仓里收下的事件和网页上的显示。
+
+- **导读版 EPUB**：在已有的全书导读、本章导读、精读批注之上，生成一本给墨水屏离线读的 EPUB（卷首全书导读、章首本章导读、段下批注）。在仓库根目录运行：
+
+  ```
+  uv run --no-project --with markdown --with lxml python -I server/annotated_epub.py <calibre_id> [输出路径]
+  ```
+
+  不传路径时写到 `<数据目录>/annotated/<书号> 导读版 [or<书号>].epub`。文件名里的 `[or<书号>]` 给外部阅读器认书。`markdown` 不写入 `requirements.txt`，只在这条命令里用 `uv run --with` 带上。
+- **安卓原生位置**：网页版用 EPUB CFI。原生阅读器另有两种位置，和 CFI 进度互不覆盖，都放在 `progress_xp`，进度里带 `device`。
+  - `pos_kind=crengine`：EPUB 的 xpointer，字段是 `pos` / `pos_end`。评注和删除不带服务器事件号，按这两个位置挂回或删掉当时那条划线。
+  - `pos_kind=pdf`：`pos` 形如 `pdfpage:页码`，划线另带 `quads`。评注和删除按 `pos` + `pos_end` + `quads` 对回；和 crengine 互不命中。
+  网页版在对应节或 PDF 页按原文找到位置画出来，笔记列表可以跳过去。
+- **手写批注**：`ink` 事件保存笔画，网页在对应段落下画出笔迹。识别引擎 `OWN_READER_INK_ENGINE`：
+  - `off`（默认）：只保存和显示，不调用模型。
+  - `openai`：`OWN_READER_INK_URL` 与 `OWN_READER_INK_MODEL`，向任意 OpenAI 兼容接口发 `chat/completions`，图片用 data URI，只用标准库。
+  - `claude`：走现有 Claude API（`llm.api_call`），模型 `OWN_READER_INK_CLAUDE_MODEL`（默认 `claude-sonnet-5-5`），花费计入上面的额度周期。
+- **跨站防护**：POST 只收 `Content-Type: application/json`，请求体必须是 JSON 对象，`Content-Length` 不得超过 50MB。带 `Origin` 时必须和 `Host` 同源。`Host` 只认 `127.0.0.1`、`localhost`、`[::1]` 和 `*.ts.net`。本服务不回答 CORS 预检，所以浏览器里的跨站 JSON 请求会被拦下。
 
 ## 地理批注
 
@@ -115,7 +136,11 @@ cp config.example.conf config.conf      # 按需改：至少确认 OWN_READER_CA
 | `OWN_READER_RECS_BACKEND` / `OWN_READER_LIBRARY_BACKEND` | `claude` | 荐书 / 书库评分用的后端 |
 | `OWN_READER_TRANSLATE_CHAIN` | `mt_free,mt_local` | 翻译后端顺序 |
 | `OWN_READER_ANTHROPIC_KEY_FILE` | `~/.config/anthropic/api-key.txt` | Claude API key 文件（`claude_api` 后端） |
-| `OWN_READER_API_MONTHLY_CAP` | `20` | Claude API 月花费上限（美元，本地估算） |
+| `OWN_READER_API_MONTHLY_CAP` | `20` | Claude API 额度周期花费上限（美元，本地估算） |
+| `OWN_READER_CREDIT_DAY` | `1` | 额度周期起点（每月几号，1–28；1 = 自然月） |
+| `OWN_READER_INK_ENGINE` | `off` | 手写识别：`off` / `openai` / `claude` |
+| `OWN_READER_INK_URL` / `OWN_READER_INK_MODEL` | 空 | `openai` 引擎的兼容接口与模型 |
+| `OWN_READER_INK_CLAUDE_MODEL` | `claude-sonnet-5-5` | `claude` 引擎用的模型 |
 | `OWN_READER_GLOSS_BACKEND` | `claude_api` | 精读批注用的后端 |
 | `OWN_READER_GEO_DIR` | `<数据目录>/geo` | 地理批注的地名库目录 |
 | `OWN_READER_TAXONOMY` | 内置通用类目 | 自定义类目表，格式见 `taxonomy.example.json` |
@@ -124,7 +149,7 @@ cp config.example.conf config.conf      # 按需改：至少确认 OWN_READER_CA
 
 仓库里没有任何密钥。各后端用它自己 CLI 已登录的凭据，或你指定的 key 文件。
 
-**哪些东西会离开本机**：阅读行为本身（打开、翻页、停留、划线、评注）只写本机 SQLite。但荐书、书库评分、中英文版配对会把阅读史、划线、想法和提问拼进 prompt，发给你配置的 AI 后端（默认 claude，即第三方服务器）；翻译会把书的正文发给配置的翻译后端；荐书结果会去微信读书书城、Open Library、国立国会図書館查书。**Claude API**（精读批注、每章导读、全书导读、整本批量翻译）会收到书的正文（全书导读是整本书）和你的读者画像；全书导读还会带上你读过、做过笔记的书名，并让 Anthropic 代为联网搜索。**地理批注**会把选段及前后文发给提问用的后端，今地名查询会发给 OpenStreetMap Nominatim，地图瓦片从 OpenTopoMap / Esri 加载。只想完全本机，就把所有后端都配成 `local`，并且不用 Claude API 相关功能和地理批注。
+**哪些东西会离开本机**：阅读行为本身（打开、翻页、停留、划线、评注）只写本机 SQLite。但荐书、书库评分、中英文版配对会把阅读史、划线、想法和提问拼进 prompt，发给你配置的 AI 后端（默认 claude，即第三方服务器）；翻译会把书的正文发给配置的翻译后端；荐书结果会去微信读书书城、Open Library、国立国会図書館查书。**Claude API**（精读批注、每章导读、全书导读、整本批量翻译）会收到书的正文（全书导读是整本书）和你的读者画像；全书导读还会带上你读过、做过笔记的书名，并让 Anthropic 代为联网搜索。**地理批注**会把选段及前后文发给提问用的后端，今地名查询会发给 OpenStreetMap Nominatim，地图瓦片从 OpenTopoMap / Esri 加载。**手写识别**在 `OWN_READER_INK_ENGINE` 为 `openai` 或 `claude` 时，会把笔迹图和旁边的原文发给该接口；`off` 时不外发。只想完全本机，就把所有后端都配成 `local`，并且不用 Claude API 相关功能和地理批注。
 
 `server/llm.py` 里的 `POLICY_DRAFT` 按数据敏感度限定后端：你的笔记、提问、阅读记录、读者画像默认**不会**发给 `free`（OpenRouter 免费档）和 `gemini`；书的正文（翻译用）可以发给任何后端。按自己的信任边界改这张表。
 
@@ -133,7 +158,7 @@ cp config.example.conf config.conf      # 按需改：至少确认 OWN_READER_CA
 - `<数据目录>/reader.sqlite`：事件库（唯一真值），以及派生表：翻译缓存、精读批注缓存（`gloss_*`）、全书导读（`book_dossier`）、章节切分（`chapter_seg`）、Batch 作业（`batch_job`）、Claude API 花费账本（`api_spend`）、书库分类评分、荐书、导入的外部笔记、模型调用审计（`llm_calls`，只存长度与元数据，不存 prompt 原文）。
 - `<数据目录>/reader_profile.md`：精读批注与导读用的读者画像。
 - `<数据目录>/geo/`：地理批注的原始数据与 `geo.sqlite`（自行下载生成，见「地理批注」）。
-- `<数据目录>/booktext/`、`bilingual/`、`import/`：全文段落缓存、双语 EPUB、微信读书原始 JSON 缓存。
+- `<数据目录>/booktext/`、`bilingual/`、`annotated/`、`import/`：全文段落缓存、双语 EPUB、导读版 EPUB、微信读书原始 JSON 缓存。
 - `<数据目录>/profile.md`、`needs.md`、`should.md`、`positions.md`、`rec_memo.md`：荐书与评分读的「关于你」的文字，首次运行生成模板，随便改。
 - `<数据目录>/fonts/`：放进去的 ttf/otf 会出现在阅读页的字体选单里（也会读 `~/Library/Fonts`）。
 - Calibre 书库只读，不会写。
