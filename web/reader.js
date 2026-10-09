@@ -223,9 +223,10 @@ async function main() {
   const state = await api(`/api/books/${bookId}/state`)
   document.title = state.title
   $('#title').textContent = state.title
-  // 安卓 crengine 版留下的划线没有 cfi（只有 xpointer）：各节载入时按原文找到位置再画（placeXpHighlights）
+  // 安卓版留下的划线没有 cfi：各节载入时按原文找到位置再画（placeXpHighlights / placePdfHighlights）
   for (const h of state.highlights) {
-    if (h.cfi) marks.set(h.cfi, { kind: 'hl', ...h })
+    if (h.pos_kind === 'pdf' && h.text) pdfHlPending.push(h)
+    else if (h.cfi) marks.set(h.cfi, { kind: 'hl', ...h })
     else if (h.pos_kind === 'crengine' && h.text) xpPending.push(h)
   }
   for (const k of (state.inks || [])) if (k.pos_kind !== 'pdf') inkPending.push(k)
@@ -421,6 +422,8 @@ $('#b-dos').onclick = async () => {
 // 所以序号对上的节里任何长度都认，别的节里只认 8 个字以上的原文（太短容易认错地方）。
 const xpPending = []
 const xpResolved = new Map() // 划线事件号 -> cfi（笔记列表跳转用）
+const pdfHlPending = []
+const pdfHlResolved = new Map() // 划线事件号 -> cfi（笔记列表跳转用）
 const inkPending = []
 const inkResolved = new Map() // ink_id -> cfi（笔记列表跳转用）
 function placeXpHighlights(doc, index) {
@@ -453,6 +456,48 @@ function placeXpHighlights(doc, index) {
       view.addAnnotation({ value: cfi })
     } catch (e) { console.warn('xp highlight', e) }
   }
+}
+
+// ---- 安卓原生版 PDF 划线：按原文在对应页码文字层里找位置，换成 cfi 再画 ----
+function placePdfHighlights(doc, index) {
+  if (!pdfHlPending.length || !doc?.body) return
+  const hasPageHl = pdfHlPending.some(h => {
+    const p = +(/pdfpage:(\d+)/.exec(h.pos || '')?.[1] ?? -1)
+    return p === index
+  })
+  if (!hasPageHl) return
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+    acceptNode: n => n.parentElement?.closest('.or-tr, .or-gl, .or-ink') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  })
+  let flat = ''
+  const map = [] // flat 里每个字 -> [节点, 节点内偏移]
+  for (let n; (n = walker.nextNode());) {
+    const t = n.nodeValue
+    for (let i = 0; i < t.length; i++) if (!/\s/.test(t[i])) { flat += t[i]; map.push([n, i]) }
+  }
+  if (!flat) return
+  let placed = false
+  for (let k = pdfHlPending.length - 1; k >= 0; k--) {
+    const h = pdfHlPending[k]
+    const p = +(/pdfpage:(\d+)/.exec(h.pos || '')?.[1] ?? -1)
+    if (p !== index) continue
+    const needle = h.text.replace(/\s+/g, '')
+    if (!needle) continue
+    const at = flat.indexOf(needle)
+    if (at < 0) continue
+    const range = doc.createRange()
+    const [sn, so] = map[at], [en, eo] = map[at + needle.length - 1]
+    range.setStart(sn, so)
+    range.setEnd(en, eo + 1)
+    try {
+      const cfi = view.getCFI(index, range)
+      marks.set(cfi, { kind: 'hl', ...h, cfi })
+      pdfHlResolved.set(h.id, cfi)
+      pdfHlPending.splice(k, 1)
+      placed = true
+    } catch (e) { console.warn('pdf highlight', e) }
+  }
+  if (placed) drawPDFMarks(doc, index)
 }
 
 // ---- 安卓原生版的手写批注：按手写旁边的原文找到段落，在段落末尾画出笔迹和识别出的文字 ----
@@ -510,6 +555,7 @@ function onLoad({ detail: { doc, index } }) {
   gloss.section(doc, index)
   if (isPDF) {
     docIndex.set(doc, index)
+    placePdfHighlights(doc, index)
     drawPDFMarks(doc, index)
     schedulePDFRedraw()
   }
@@ -766,6 +812,7 @@ function showMark(m) {
       try { await logEvent('delete', { cfi: m.cfi, payload: { target_id: m.id } }) }
       catch (e) { saveFail(e); return } // Kimi-3: 没删成别让本地状态先减掉
       marks.delete(m.cfi)
+      pdfHlResolved.delete(m.id)
       if (isPDF) { pdfResolvers.delete(m.cfi); redrawPDF() }
       else view.deleteAnnotation({ value: m.cfi })
       closeSheet()
@@ -878,19 +925,48 @@ $('#b-search').onclick = () => {
 $('#b-notes').onclick = async () => {
   const s = await api(`/api/books/${bookId}/state`)
   const rows = [
-    ...s.highlights.map(h => ({ ts: h.ts, cfi: h.cfi || xpResolved.get(h.id) || '', html: `${h.pos_kind === 'crengine' ? '<div class="muted">Boox</div>' : ''}<div class="quote">${esc(h.text)}</div>${h.note ? `<div>${esc(h.note)}</div>` : ''}` })),
-    ...(s.inks || []).map(k => ({
-      ts: k.ts,
-      cfi: inkResolved.get(k.ink_id) || '',
-      html: `<div class="muted">Boox 手写${k.chapter ? ' · ' + esc(k.chapter) : ''}</div>${inkSVG(k.strokes, 260)}<div>${k.recognized ? esc(k.recognized) : '<span class="muted">（尚未识别）</span>'}</div>`,
-    })),
-    ...s.asks.map(a => ({ ts: a.ts, cfi: a.cfi, html: `<div class="quote">${esc(a.selection)}</div><div class="q">问：${esc(a.question || '解释这段')}</div><div class="answer">${md(a.answer)}</div><div class="muted">${esc(a.model)}</div>` })),
-    ...(s.imported || []).map(n => ({ ts: n.created_ts || '', cfi: '', html: `<div class="muted">${n.source === 'weread' ? '微信读书' : esc(n.source)}${n.chapter ? ' · ' + esc(n.chapter) : ''}</div>${n.quote ? `<div class="quote">${esc(n.quote)}</div>` : ''}${n.text ? `<div class="answer">${md(n.text)}</div>` : ''}` })),
+    ...s.highlights.map(h => {
+      const isPdf = h.pos_kind === 'pdf'
+      const page = isPdf ? +(/pdfpage:(\d+)/.exec(h.pos || '')?.[1] ?? -1) : null
+      const cfi = h.cfi || xpResolved.get(h.id) || pdfHlResolved.get(h.id) || ''
+      const tag = (h.pos_kind === 'crengine' || isPdf) ? '<div class="muted">Boox</div>' : ''
+      return {
+        ts: h.ts,
+        cfi,
+        page: page != null && page >= 0 ? page : null,
+        html: `${tag}<div class="quote">${esc(h.text)}</div>${h.note ? `<div>${esc(h.note)}</div>` : ''}`,
+      }
+    }),
+    ...(s.inks || []).map(k => {
+      if (k.pos_kind === 'pdf') {
+        const page = +(/pdfpage:(\d+)/.exec(k.pos || '')?.[1] ?? 0)
+        return {
+          ts: k.ts,
+          cfi: '',
+          page,
+          html: `<div class="muted">Boox 手写 · 第 ${page + 1} 页</div>${inkSVG(k.strokes, 260)}<div>${k.recognized ? esc(k.recognized) : '<span class="muted">（尚未识别）</span>'}</div>`,
+        }
+      }
+      return {
+        ts: k.ts,
+        cfi: inkResolved.get(k.ink_id) || '',
+        page: null,
+        html: `<div class="muted">Boox 手写${k.chapter ? ' · ' + esc(k.chapter) : ''}</div>${inkSVG(k.strokes, 260)}<div>${k.recognized ? esc(k.recognized) : '<span class="muted">（尚未识别）</span>'}</div>`,
+      }
+    }),
+    ...s.asks.map(a => ({ ts: a.ts, cfi: a.cfi, page: null, html: `<div class="quote">${esc(a.selection)}</div><div class="q">问：${esc(a.question || '解释这段')}</div><div class="answer">${md(a.answer)}</div><div class="muted">${esc(a.model)}</div>` })),
+    ...(s.imported || []).map(n => ({ ts: n.created_ts || '', cfi: '', page: null, html: `<div class="muted">${n.source === 'weread' ? '微信读书' : esc(n.source)}${n.chapter ? ' · ' + esc(n.chapter) : ''}</div>${n.quote ? `<div class="quote">${esc(n.quote)}</div>` : ''}${n.text ? `<div class="answer">${md(n.text)}</div>` : ''}` })),
   ].sort((a, b) => b.ts.localeCompare(a.ts))
-  openSheet(`笔记（${rows.length}）`, rows.map(r => `<div class="item" data-cfi="${esc(r.cfi)}">${r.html}</div>`).join('') || '<p class="muted">还没有划线和提问</p>')
+  openSheet(`笔记（${rows.length}）`, rows.map(r =>
+    `<div class="item" data-cfi="${esc(r.cfi)}" data-page="${r.page != null ? r.page : ''}">${r.html}</div>`
+  ).join('') || '<p class="muted">还没有划线和提问</p>')
   $('#sheet-body').onclick = e => {
-    const cfi = e.target.closest('[data-cfi]')?.dataset.cfi
+    const it = e.target.closest('.item')
+    if (!it) return
+    const cfi = it.dataset.cfi
+    const page = it.dataset.page !== '' && it.dataset.page != null ? Number(it.dataset.page) : null
     if (cfi) { view.goTo(cfi); closeSheet(); $('#top').classList.remove('show') }
+    else if (page != null && !isNaN(page)) { view.goTo(page); closeSheet(); $('#top').classList.remove('show') }
   }
 }
 document.addEventListener('keydown', onKey)

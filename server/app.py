@@ -154,7 +154,15 @@ def book_format(book_id: int) -> str | None:
 
 
 def _same_xp(h: dict, p: dict) -> bool:
-    return h.get("pos_kind") == "crengine" and h.get("pos") == p.get("pos") and h.get("pos_end") == p.get("pos_end")
+    """同一条划线。crengine：pos+pos_end。pdf：再加 quads（同页可以有多条）。pos_kind 不同互不命中。"""
+    kind = p.get("pos_kind")
+    if kind not in ("crengine", "pdf") or h.get("pos_kind") != kind:
+        return False
+    if h.get("pos") != p.get("pos") or h.get("pos_end") != p.get("pos_end"):
+        return False
+    if kind == "pdf":
+        return h.get("quads") == p.get("quads")
+    return True
 
 
 def book_state(book_id: int) -> dict:
@@ -186,7 +194,7 @@ def book_state(book_id: int) -> dict:
             continue
         if r["type"] == "progress":
             # device：安卓版打开书时据此判断最新位置是不是自己报的（是就不跳）
-            if p.get("pos_kind") == "crengine":
+            if p.get("pos_kind") in ("crengine", "pdf"):  # pdf：安卓 PDF 阅读页，pos 为 "pdfpage:页码"
                 progress_xp = {**p, "ts": r["ts"], "device": r["device"]}
             elif r["cfi"]:
                 progress = {"cfi": r["cfi"], **p, "ts": r["ts"], "device": r["device"]}
@@ -200,18 +208,22 @@ def book_state(book_id: int) -> dict:
                 inks[p["ink_id"]].update(recognized=r["text"], recognized_source=p.get("source"))
         elif r["type"] == "delete" and isinstance(p, dict) and p.get("ink_id"):
             inks.pop(p["ink_id"], None)
-        elif r["type"] == "delete" and isinstance(p, dict) and p.get("pos_kind") == "crengine" and "target_id" not in p:
-            # 安卓原生版删划线：设备不知道事件号，按位置删掉此刻同位置的划线（之后重划的不受影响）
+        elif r["type"] == "delete" and isinstance(p, dict) and p.get("pos_kind") in ("crengine", "pdf") and "target_id" not in p:
+            # 安卓原生版删划线：设备不知道事件号，按位置删掉此刻同位置的划线（之后重划的不受影响）。
+            # pdf 的「位置」是 pos+pos_end+quads（见 _same_xp）。
             for hid in [k for k, h in highlights.items() if _same_xp(h, p)]:
                 del highlights[hid]
         elif r["type"] == "highlight":
-            highlights[r["id"]] = {"id": r["id"], "cfi": r["cfi"], "text": r["text"],
-                                   "color": p.get("color", "yellow"), "note": None, "ts": r["ts"],
-                                   "pos": p.get("pos"), "pos_end": p.get("pos_end"), "pos_kind": p.get("pos_kind"),
-                                   "chapter": p.get("chapter")}
+            item = {"id": r["id"], "cfi": r["cfi"], "text": r["text"],
+                    "color": p.get("color", "yellow"), "note": None, "ts": r["ts"],
+                    "pos": p.get("pos"), "pos_end": p.get("pos_end"), "pos_kind": p.get("pos_kind"),
+                    "chapter": p.get("chapter")}
+            if p.get("pos_kind") == "pdf":
+                item["quads"] = p.get("quads")
+            highlights[r["id"]] = item
         elif r["type"] == "note":
             h = highlights.get(p.get("highlight_id"))
-            if h is None and p.get("pos_kind") == "crengine":
+            if h is None and p.get("pos_kind") in ("crengine", "pdf"):
                 # 安卓原生版的评注不带 highlight_id，按位置挂到同位置最新的那条划线上
                 h = next((x for x in reversed(highlights.values()) if _same_xp(x, p)), None)
             if h:

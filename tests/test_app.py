@@ -355,3 +355,36 @@ def test_book_state_progress_carries_device(events):
     app.add_event("android-B", 5, "progress", None, None, {"pos": "/p[1].0", "pos_kind": "crengine", "fraction": 0.3})
     st = app.book_state(5)
     assert st["progress"]["device"] == "web-a" and st["progress_xp"]["device"] == "android-B"
+
+
+def test_book_state_keeps_pdf_page_progress_from_android(events):
+    """安卓 PDF 阅读页的进度：pos_kind=pdf，与 crengine 位置一样放 progress_xp。"""
+    app.add_event("android-x", 7, "progress", None, None,
+                  {"pos": "pdfpage:41", "pos_kind": "pdf", "fraction": 0.24, "file": "x.pdf"})
+    xp = app.book_state(7)["progress_xp"]
+    assert xp["pos"] == "pdfpage:41" and xp["pos_kind"] == "pdf" and xp["fraction"] == 0.24
+
+
+def test_book_state_pdf_highlight_note_and_delete_by_quads(events):
+    """PDF 划线带 quads；评注和删除按 pos+pos_end+quads 对回当时那条。同页另一处、以及同位置字符串的 crengine 划线都不动。"""
+    quads = [[10, 20, 30, 20, 10, 32, 30, 32]]
+    other_quads = [[40, 20, 60, 20, 40, 32, 60, 32]]
+    pdf = {"pos": "pdfpage:3", "pos_end": "pdfpage:3", "pos_kind": "pdf", "quads": quads}
+    h = app.add_event("android-x", 7, "highlight", None, "原文",
+                      {**pdf, "chapter": "第二章", "file": "a.pdf", "source": "android-native"})
+    app.add_event("android-x", 7, "note", None, "我的评注", {**pdf, "quote": "原文"})
+    h2 = app.add_event("android-x", 7, "highlight", None, "另一处", {**pdf, "quads": other_quads})
+    hc = app.add_event("android-x", 7, "highlight", None, "epub",
+                       {"pos": "pdfpage:3", "pos_end": "pdfpage:3", "pos_kind": "crengine"})
+    by_id = {x["id"]: x for x in app.book_state(7)["highlights"]}
+    assert by_id[h]["text"] == "原文" and by_id[h]["note"] == "我的评注"
+    assert by_id[h]["pos"] == "pdfpage:3" and by_id[h]["pos_end"] == "pdfpage:3"
+    assert by_id[h]["pos_kind"] == "pdf" and by_id[h]["chapter"] == "第二章" and by_id[h]["quads"] == quads
+    assert by_id[h2]["note"] is None and by_id[h2]["quads"] == other_quads
+    assert by_id[hc]["note"] is None and "quads" not in by_id[hc] and by_id[hc]["pos_kind"] == "crengine"
+    app.add_event("android-x", 7, "delete", None, "原文", dict(pdf))
+    left = {x["id"] for x in app.book_state(7)["highlights"]}
+    assert h not in left and h2 in left and hc in left
+    h3 = app.add_event("android-x", 7, "highlight", None, "原文", dict(pdf))
+    ids = {x["id"] for x in app.book_state(7)["highlights"]}
+    assert ids == {h2, hc, h3}
