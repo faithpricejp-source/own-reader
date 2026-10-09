@@ -139,7 +139,7 @@ def test_book_state_full_cycle(events):
     app.add_event("d", 5, "progress", "cfi-p", None, {"fraction": 0.25})
     app.add_event("d", 5, "ask", "cfi-a", "选中句", {"question": "Q?", "answer": "A!", "model": "claude"})
     st = app.book_state(5)
-    assert st["progress"] == {"cfi": "cfi-p", "fraction": 0.25, "ts": st["progress"]["ts"]}
+    assert st["progress"] == {"cfi": "cfi-p", "fraction": 0.25, "ts": st["progress"]["ts"], "device": "d"}
     assert st["highlights"] == [{"id": h, "cfi": "cfi-h", "text": "划线原文", "color": "green",
                                 "note": "我的批注", "ts": st["highlights"][0]["ts"], "pos": None, "pos_end": None, "pos_kind": None, "chapter": None}]
     assert st["asks"][0]["question"] == "Q?" and st["asks"][0]["answer"] == "A!"
@@ -347,3 +347,11 @@ def test_book_state_links_crengine_note_and_delete_by_pos(events):
     # 删了以后在同一位置重新划：新划线不受先前 delete 影响
     h2 = app.add_event("android-x", 5, "highlight", None, "原文一", dict(xp))
     assert sorted(h["id"] for h in app.book_state(5)["highlights"]) == sorted([other, h2])
+
+
+def test_book_state_progress_carries_device(events):
+    """进度带上报设备：安卓版打开书时，最新位置是自己报的就不跳。"""
+    app.add_event("web-a", 5, "progress", "cfi-web", None, {"fraction": 0.2})
+    app.add_event("android-B", 5, "progress", None, None, {"pos": "/p[1].0", "pos_kind": "crengine", "fraction": 0.3})
+    st = app.book_state(5)
+    assert st["progress"]["device"] == "web-a" and st["progress_xp"]["device"] == "android-B"

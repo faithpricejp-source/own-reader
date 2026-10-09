@@ -184,10 +184,11 @@ def book_state(book_id: int) -> dict:
         if r["id"] in deleted:
             continue
         if r["type"] == "progress":
+            # device：安卓版打开书时据此判断最新位置是不是自己报的（是就不跳）
             if p.get("pos_kind") == "crengine":
-                progress_xp = {**p, "ts": r["ts"]}
+                progress_xp = {**p, "ts": r["ts"], "device": r["device"]}
             elif r["cfi"]:
-                progress = {"cfi": r["cfi"], **p, "ts": r["ts"]}
+                progress = {"cfi": r["cfi"], **p, "ts": r["ts"], "device": r["device"]}
         elif r["type"] == "delete" and isinstance(p, dict) and p.get("pos_kind") == "crengine" and "target_id" not in p:
             # 安卓原生版删划线：设备不知道事件号，按位置删掉此刻同位置的划线（之后重划的不受影响）
             for hid in [k for k, h in highlights.items() if _same_xp(h, p)]:
