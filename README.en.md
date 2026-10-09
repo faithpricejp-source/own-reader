@@ -140,6 +140,7 @@ Everything is via environment variables, or `config.conf` in the repository root
 | `OWN_READER_CREDIT_DAY` | `1` | Day of month the credit period starts (1–28; 1 = calendar month) |
 | `OWN_READER_INK_ENGINE` | `off` | Handwriting recognition: `off` / `openai` / `claude` |
 | `OWN_READER_INK_URL` / `OWN_READER_INK_MODEL` | empty | Compatible endpoint and model for the `openai` engine |
+| `OWN_READER_INK_API_KEY` | empty | Optional bearer key for a hosted `openai`-compatible endpoint |
 | `OWN_READER_INK_CLAUDE_MODEL` | `claude-sonnet-5-5` | Model used by the `claude` engine |
 | `OWN_READER_GLOSS_BACKEND` | `claude_api` | Backend for close-reading glosses |
 | `OWN_READER_GEO_DIR` | `<data dir>/geo` | Gazetteer directory for geographic annotation |

@@ -138,8 +138,11 @@ def _openai(png: Path, context: str) -> tuple[str, str]:
             {"type": "text", "text": PROMPT.format(context=context[:300])},
         ],
     }]}
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                 headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    key = os.environ.get("OWN_READER_INK_API_KEY", "").strip()  # 托管接口要密钥时用；本机服务一般不用
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers=headers)
     with urllib.request.urlopen(req, timeout=120) as r:
         resp = json.load(r)
     try:

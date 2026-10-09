@@ -140,6 +140,7 @@ cp config.example.conf config.conf      # 按需改：至少确认 OWN_READER_CA
 | `OWN_READER_CREDIT_DAY` | `1` | 额度周期起点（每月几号，1–28；1 = 自然月） |
 | `OWN_READER_INK_ENGINE` | `off` | 手写识别：`off` / `openai` / `claude` |
 | `OWN_READER_INK_URL` / `OWN_READER_INK_MODEL` | 空 | `openai` 引擎的兼容接口与模型 |
+| `OWN_READER_INK_API_KEY` | 空 | 托管的兼容接口要密钥时填（Bearer），本机服务不用 |
 | `OWN_READER_INK_CLAUDE_MODEL` | `claude-sonnet-5-5` | `claude` 引擎用的模型 |
 | `OWN_READER_GLOSS_BACKEND` | `claude_api` | 精读批注用的后端 |
 | `OWN_READER_GEO_DIR` | `<数据目录>/geo` | 地理批注的地名库目录 |

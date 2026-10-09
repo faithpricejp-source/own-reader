@@ -14,7 +14,7 @@ XP = {"pos": "/body/DocFragment[2]/body/div/p[3]/text().5", "pos_kind": "crengin
 
 def _ink(local_id="ink-1", book=5):
     return app.add_event("android-x", book, "ink", None, None,
-                         {**XP, "ink_id": local_id, "strokes": STROKES, "context": "大臣要求全部告诉我", "chapter": "第6章"})
+                         {**XP, "ink_id": local_id, "strokes": STROKES, "context": "手写旁边的原文", "chapter": "第6章"})
 
 
 def test_book_state_lists_ink_with_strokes_and_context(events):
@@ -23,13 +23,13 @@ def test_book_state_lists_ink_with_strokes_and_context(events):
     assert len(inks) == 1
     k = inks[0]
     assert k["id"] == eid and k["ink_id"] == "ink-1" and k["strokes"] == STROKES
-    assert k["context"] == "大臣要求全部告诉我" and k["pos"] == XP["pos"] and k["recognized"] is None
+    assert k["context"] == "手写旁边的原文" and k["pos"] == XP["pos"] and k["recognized"] is None
 
 
 def test_recognized_text_attaches_by_ink_id_latest_wins(events):
     _ink()
-    app.add_event("ink", 5, "note", None, "恶意执行", {"ink_id": "ink-1", "source": "openai"})
-    assert app.book_state(5)["inks"][0]["recognized"] == "恶意执行"
+    app.add_event("ink", 5, "note", None, "识别出的文字", {"ink_id": "ink-1", "source": "openai"})
+    assert app.book_state(5)["inks"][0]["recognized"] == "识别出的文字"
     app.add_event("android-x", 5, "note", None, "恶意服从", {"ink_id": "ink-1", "source": "manual"})
     k = app.book_state(5)["inks"][0]
     assert k["recognized"] == "恶意服从" and k["recognized_source"] == "manual"
@@ -89,13 +89,13 @@ def test_recognize_one_writes_note_event(events, monkeypatch):
 
     def fake_engine(png, context):
         seen["context"] = context
-        return "恶意执行", "test-engine"
+        return "识别出的文字", "test-engine"
 
     monkeypatch.setattr(ink, "_engine", lambda: fake_engine)
     assert ink.recognize_pending() == 1
     k = app.book_state(5)["inks"][0]
-    assert k["recognized"] == "恶意执行" and k["recognized_source"] == "test-engine"
-    assert seen["context"] == "大臣要求全部告诉我"
+    assert k["recognized"] == "识别出的文字" and k["recognized_source"] == "test-engine"
+    assert seen["context"] == "手写旁边的原文"
     assert ink.recognize_pending() == 0  # 不重复识别
 
 
