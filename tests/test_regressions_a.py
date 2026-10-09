@@ -17,7 +17,9 @@ import app  # server/app.py（conftest 已把 server/ 加入 sys.path）
 
 class _Headers:
     def __init__(self, body: bytes):
-        self._d = {"Content-Length": str(len(body))}
+        # 跨站防护只收本机 Host + application/json。这组夹具测的是业务失败路径，请求本身是同源 JSON。
+        self._d = {"Content-Length": str(len(body)), "Content-Type": "application/json",
+                   "Host": "127.0.0.1"}
 
     def get(self, k, default=None):
         return self._d.get(k, default)

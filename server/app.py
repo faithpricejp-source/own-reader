@@ -418,9 +418,31 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code: int = 200):
         self._send(code, json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
+    def _cross_site(self) -> str | None:
+        """跨站请求防护：不拦的话，浏览器里任意网页都能用 text/plain 的「简单请求」POST 到
+        127.0.0.1 或 tailnet 地址，替用户触发花钱的 API 任务、改写读者画像。
+        规则：① 只收 application/json（跨站发 JSON 必须先预检，本服务不答预检，浏览器就会拦下）；
+        ② 带 Origin 头时，Origin 的主机必须和 Host 头一致；③ Host 只认本机与 Tailscale 名字（挡 DNS 重绑定）。"""
+        host = (self.headers.get("Host") or "").lower()
+        hostname = host.rsplit(":", 1)[0] if not host.startswith("[") else host
+        if hostname not in ("127.0.0.1", "localhost", "[::1]") and not hostname.endswith(".ts.net"):
+            return f"host not allowed: {host}"
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            return "content-type must be application/json"
+        origin = self.headers.get("Origin")
+        if origin and urlparse(origin).netloc.lower() != host:
+            return f"cross-origin request refused: {origin}"
+        return None
+
     def _body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
-        return json.loads(self.rfile.read(n) or b"{}")
+        if n < 0 or n > 50 * 1024 * 1024:
+            raise ValueError("bad Content-Length")
+        data = json.loads(self.rfile.read(n) or b"{}")
+        if not isinstance(data, dict):
+            raise ValueError("request body must be a JSON object")
+        return data
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -530,6 +552,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        bad = self._cross_site()
+        if bad:
+            return self._json({"error": bad}, 403)
         try:
             req = self._body()
             if path == "/api/events":
