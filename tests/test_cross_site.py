@@ -53,3 +53,9 @@ def test_tailnet_host_allowed(server):
 def test_non_object_json_gets_error_response_not_dropped(server):
     status, body = post(server, {"Content-Type": "application/json"}, body=b"[1]")
     assert status == 500 and b"JSON object" in body
+
+
+def test_ipv6_loopback_with_port_allowed(server):
+    """Host: [::1]:<port>（浏览器用 IPv6 回环访问时）要先剥掉端口再比白名单。"""
+    h = {"Content-Type": "application/json", "Host": f"[::1]:{server}", "Origin": f"http://[::1]:{server}"}
+    assert post(server, h)[0] == 200

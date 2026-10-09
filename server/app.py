@@ -460,7 +460,8 @@ class Handler(BaseHTTPRequestHandler):
         规则：① 只收 application/json（跨站发 JSON 必须先预检，本服务不答预检，浏览器就会拦下）；
         ② 带 Origin 头时，Origin 的主机必须和 Host 头一致；③ Host 只认本机与 Tailscale 名字（挡 DNS 重绑定）。"""
         host = (self.headers.get("Host") or "").lower()
-        hostname = host.rsplit(":", 1)[0] if not host.startswith("[") else host
+        # IPv6 形如 [::1]:8460：取到 ] 为止；其余去掉 :端口
+        hostname = host[:host.index("]") + 1] if host.startswith("[") and "]" in host else host.rsplit(":", 1)[0]
         if hostname not in ("127.0.0.1", "localhost", "[::1]") and not hostname.endswith(".ts.net"):
             return f"host not allowed: {host}"
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
