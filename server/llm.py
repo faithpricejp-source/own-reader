@@ -127,6 +127,10 @@ def _spend_db():
     c = sqlite3.connect(AUDIT_DB, timeout=10)
     c.execute("CREATE TABLE IF NOT EXISTS api_spend(id INTEGER PRIMARY KEY AUTOINCREMENT, month TEXT, "
               "ts TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), model TEXT, usd REAL, usage TEXT)")
+    # ref：Batch 结果按「批次/请求」记账的去重键，重读结果不重复记、读到一半中断也不漏记已处理的
+    if "ref" not in {r[1] for r in c.execute("PRAGMA table_info(api_spend)")}:
+        c.execute("ALTER TABLE api_spend ADD COLUMN ref TEXT")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS api_spend_ref ON api_spend(ref) WHERE ref IS NOT NULL")
     return c
 
 
@@ -227,9 +231,8 @@ def batch_status(batch_id: str) -> dict:
 
 
 def batch_results(batch_id: str):
-    """逐条产出 (custom_id, 正文或 None, 错误或 None)，并把每条花费按五折记账。"""
-    rows = []
-    client = _client()  # 必须在整个流式读取期间持有：临时对象被回收会关掉连接（实测会 EBADF）
+    """逐条产出 (custom_id, 正文或 None, 错误或 None)。每条的花费按五折立即记账（按批次/请求去重）。"""
+    client = _client()  # 必须在整个流式读取期间持有：临时对象被回收会关掉连接（10-09 实测 EBADF）
     for r in client.messages.batches.results(batch_id):
         res = r.result
         if res.type != "succeeded":
@@ -238,15 +241,14 @@ def batch_results(batch_id: str):
             continue
         msg = res.message
         u = msg.usage.model_dump()
-        rows.append((time.strftime("%Y-%m"), msg.model + ":batch", api_cost(msg.model, u) * BATCH_DISCOUNT,
-                     json.dumps(u, default=str)))
+        with _spend_db() as c:
+            c.execute("INSERT OR IGNORE INTO api_spend(month, model, usd, usage, ref) VALUES (?,?,?,?,?)",
+                      (time.strftime("%Y-%m"), msg.model + ":batch", api_cost(msg.model, u) * BATCH_DISCOUNT,
+                       json.dumps(u, default=str), f"{batch_id}/{r.custom_id}"))
         if msg.stop_reason in ("refusal", "max_tokens"):
             yield r.custom_id, None, f"stop_reason={msg.stop_reason}"
             continue
         yield r.custom_id, "".join(b.text for b in msg.content if b.type == "text").strip() or None, None
-    if rows:
-        with _spend_db() as c:
-            c.executemany("INSERT INTO api_spend(month, model, usd, usage) VALUES (?,?,?,?)", rows)
 
 
 def ask_claude_api(messages: list[dict]) -> tuple[str, str]:

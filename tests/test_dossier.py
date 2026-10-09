@@ -148,3 +148,21 @@ def test_build_refuses_over_monthly_cap(events, fake_build, monkeypatch):
     monkeypatch.setattr(llm, "_client", lambda: pytest.fail("不该调用 API"))
     with pytest.raises(llm.BackendError, match="会超上限"):
         dossier.build(1, "x.epub", "书", "作者")
+
+
+def test_stale_running_after_restart_becomes_error(events):
+    """库里是 running 但没有线程在跑（服务器中途重启）：读的时候改成可重新生成的失败状态。"""
+    with dossier._db() as c:
+        c.execute("INSERT INTO book_dossier(book_id, state) VALUES (11, 'running')")
+    dossier._running.pop(11, None)
+    r = dossier.get(11)
+    assert r["state"] == "error" and "中断" in r["error"]
+    assert dossier.get(11)["state"] == "error"           # 已写回库
+
+
+def test_dense_script_detection_covers_kana_and_hangul():
+    """汉字、假名、谚文都按密集文字算截断上限与成本；拉丁文不算。"""
+    assert dossier._dense("これは日本語の文章です。" * 100)
+    assert dossier._dense("이것은 한국어 문장입니다. " * 100)
+    assert dossier._dense("这是一本中文书。" * 100)
+    assert not dossier._dense("This is an English book. " * 100)

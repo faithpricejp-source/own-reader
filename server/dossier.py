@@ -64,7 +64,21 @@ def _db():
 def get(book_id: int) -> dict | None:
     with _db() as c:
         r = c.execute("SELECT * FROM book_dossier WHERE book_id=?", (book_id,)).fetchone()
-    return dict(r) if r else None
+        r = dict(r) if r else None
+        # 生成中途服务器重启：库里还是 running，但没有线程在跑了，改成失败，界面上可以重新生成
+        if r and r["state"] == "running" and not (_running.get(book_id) and _running[book_id].is_alive()):
+            r.update(state="error", error="生成中断（服务器重启或进程退出），请重新生成")
+            c.execute("UPDATE book_dossier SET state='error', error=? WHERE book_id=?", (r["error"], book_id))
+    return r
+
+
+# 汉字、假名、谚文都算「密集文字」：每个 token 约 1.5 个字符；拉丁文字约 2.6 个字符一个 token
+_DENSE = re.compile(r"[一-鿿぀-ヿ가-힣]")
+
+
+def _dense(text: str) -> bool:
+    sample = text[:50000]
+    return len(_DENSE.findall(sample)) > len(sample) * 0.2
 
 
 def _book_text(epub) -> tuple[str, bool]:
@@ -77,8 +91,7 @@ def _book_text(epub) -> tuple[str, bool]:
             last = p["chapter"]
         out.append(p["text"])
     text = "\n".join(out)
-    cjk = len(re.findall(r"[一-鿿぀-ヿ]", text[:50000])) > 10000
-    cap = MAX_CHARS_CJK if cjk else MAX_CHARS_LATIN
+    cap = MAX_CHARS_CJK if _dense(text) else MAX_CHARS_LATIN
     return (text[:cap], True) if len(text) > cap else (text, False)
 
 
@@ -117,7 +130,7 @@ def build(book_id: int, epub, title: str, authors: str) -> dict:
     import gloss
     text, truncated = _book_text(epub)
     # 作者实测（一本 36 万 token 的英文书）：缓存写入 1.78 + 联网多轮缓存重读 0.42 + 输出 0.39 ≈ 2.7 美元，约 7.6 美元/百万 token
-    tokens = len(text) / (1.5 if len(re.findall(r"[一-鿿]", text[:20000])) > 5000 else 2.6)
+    tokens = len(text) / (1.5 if _dense(text) else 2.6)
     est = tokens * 7.6 / 1e6 + 0.3
     if llm.api_spent() + est > llm.API_MONTHLY_CAP:
         raise llm.BackendError(f"本月 API 估算已花 {llm.api_spent():.2f} 美元，这本书导读预估 {est:.2f}，会超上限")

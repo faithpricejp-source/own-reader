@@ -198,3 +198,17 @@ def test_batch_results_yields_and_bills_half_price(monkeypatch):
     led = _ledger()
     assert [r[1] for r in led] == ["claude-opus-5-5:batch"] * 3  # 拒答/截断也花了钱
     assert sum(r[2] for r in led) == pytest.approx(3 * 4.0 * llm.BATCH_DISCOUNT)
+
+
+def test_batch_results_bills_each_item_once_even_if_reread_or_interrupted(monkeypatch):
+    """每条结果读到就记账；读到一半中断不漏记，重读同一批次不重复记。"""
+    rows = [_batch_row("a"), _batch_row("b"), _batch_row("c")]
+    monkeypatch.setattr(llm, "_client", lambda: NS(messages=NS(batches=NS(results=lambda bid: iter(rows)))))
+    gen = llm.batch_results("mb")
+    next(gen)                                  # 只读了第一条就中断
+    gen.close()
+    assert len(_ledger()) == 1
+    list(llm.batch_results("mb"))              # 下一轮轮询从头重读
+    assert len(_ledger()) == 3
+    list(llm.batch_results("mb"))
+    assert len(_ledger()) == 3
