@@ -1,5 +1,7 @@
 import '/vendor/foliate-js/view.js'
 import { Overlayer } from '/vendor/foliate-js/overlayer.js'
+import { geoMapHTML, renderGeoMap } from '/web/geo_map.js'
+import { createGloss, rawText } from '/web/gloss_ui.js'
 
 const $ = s => document.querySelector(s)
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
@@ -65,11 +67,17 @@ const MAC_FONTS = [
   { family: 'New York', label: 'New York（系统）' },
 ]
 const TYPO_KEY = 'own-reader-typo'
+const TYPO_DEFAULT = desk ? { zh: 'Songti SC', en: 'Iowan Old Style', size: 106, line: 1.9 }
+  : { zh: 'Noto Serif SC', en: 'ChareInk7SPW', size: window.OWN_READER_LARGE ? 135 : 100, line: 1.75, bold: 0.3 }
 const typo = (() => {
-  const d = desk ? { zh: 'Songti SC', en: 'Iowan Old Style', size: 106, line: 1.9 }
-                 : { zh: 'Noto Serif SC', en: 'ChareInk7SPW', size: window.OWN_READER_LARGE ? 135 : 100, line: 1.75, bold: 0.3 }
-  try { return { ...d, ...JSON.parse(localStorage.getItem(TYPO_KEY) || '{}') } } catch { return d }
+  try { return { ...TYPO_DEFAULT, ...JSON.parse(localStorage.getItem(TYPO_KEY) || '{}') } } catch { return { ...TYPO_DEFAULT } }
 })()
+// Mac App 的 ⌘+/⌘-/⌘0 调字号（不能用整页缩放，见 macapp/main.swift）；d=0 还原默认
+window.ownReaderFontStep = d => {
+  typo.size = d === 0 ? TYPO_DEFAULT.size : Math.max(80, Math.min(200, typo.size + d))
+  try { localStorage.setItem(TYPO_KEY, JSON.stringify(typo)) } catch {}
+  applyStyles()
+}
 let serverFonts = []
 
 function typoCSS() {
@@ -283,10 +291,11 @@ function onKey(e) {
 const TR_KEY = `own-reader-tr-${bookId}`
 let trOn = (() => { try { return localStorage.getItem(TR_KEY) !== 'off' } catch { return true } })()
 const trDocs = new Map() // index -> doc
-const TR_SEL = 'p, li, blockquote, h1, h2, h3, h4, h5, h6, dd, dt, figcaption'
+// div 只取叶子块（2026-10-09 补，与 server/bilingual.py、精读批注一致）
+const TR_SEL = 'p, li, blockquote, h1, h2, h3, h4, h5, h6, dd, dt, figcaption, div'
 const trBlocks = doc => [...doc.querySelectorAll(TR_SEL)]
-  .filter(el => !el.querySelector(TR_SEL) && !el.closest('.or-tr') && el.textContent.trim().length > 1)
-const trText = el => el.textContent.replace(/\s+/g, ' ').trim()
+  .filter(el => !el.querySelector(TR_SEL) && !el.closest('.or-tr, .or-gl') && el.textContent.trim().length > 1)
+const trText = rawText // 去掉插进去的译文与精读批注再取原文
 const TR_CSS = `.or-tr { display: block; margin-top: .3em; font-size: .94em; text-indent: 0; text-align: justify;
   color: ${desk ? '#6b625a' : '#000'}; } .or-tr .or-loc { font-size: .75em; opacity: .7; }
   ${desk ? '@media (prefers-color-scheme: dark) { .or-tr { color: #b9b0a5; } }' : ''}`
@@ -359,10 +368,55 @@ $('#b-tr').onclick = () => {
   if (!trOn) trRelayout()
 }
 
+const gloss = createGloss({ api, bookId, desk, getView: () => view, relayout: trRelayout, isPDF: () => isPDF, openSheet })
+$('#b-gl').classList.toggle('on', gloss.isOn())
+$('#b-gl').onclick = async () => {
+  const render = async () => {
+    openSheet('精读批注', await gloss.panelHTML())
+    gloss.bindPanel($('#sheet-body'), render)
+    $('#b-gl').classList.toggle('on', gloss.isOn())
+  }
+  await render()
+}
+
+// 全书导读（2026-10-09）：把书读厚的总入口
+$('#b-dos').onclick = async () => {
+  const show = async () => {
+    let d
+    try { d = await api(`/api/books/${bookId}/dossier`) } catch (e) { openSheet('全书导读', `出错了：${esc(e.message)}`); return }
+    if (d.state === 'done') {
+      openSheet('全书导读', `<div class="answer">${md(d.md)}</div>
+        <div class="muted">${esc(d.model)} · 约 ${(d.usd || 0).toFixed(2)} 美元${d.truncated ? ' · 正文过长，只读了前面部分' : ''}</div>
+        <div class="row"><button id="dos-redo">重新生成</button></div>
+        <div id="dos-ch" class="muted"></div>`)
+      $('#dos-redo').onclick = async () => { await api(`/api/books/${bookId}/dossier`, { force: true }); show() }
+      const ch = await api(`/api/books/${bookId}/chapters`).catch(() => null)
+      if (ch) {
+        $('#dos-ch').innerHTML = `各章导读：${ch.chapters ? `已生成 ${ch.done}/${ch.chapters} 章` : '还没生成'}${ch.pending ? `，${ch.pending} 章在后台批量生成（通常一小时内）` : ''}。
+          打开「批」后显示在每章开头。` + (ch.pending || (ch.chapters && ch.done >= ch.chapters) ? '' :
+          `<div class="row"><button id="dos-ch-go">生成各章导读（走批量，五折）</button></div>`)
+        const b = $('#dos-ch-go')
+        if (b) b.onclick = async () => { b.disabled = true; await api(`/api/books/${bookId}/chapters`, {}); show() }
+      }
+    } else if (d.state === 'running') {
+      openSheet('全书导读', `<div class="muted">正在读整本书并联网核对（通常 5–8 分钟），可以先关掉接着读。</div>`)
+      setTimeout(() => { if ($('#sheet').classList.contains('show') && $('#sheet-h').textContent === '全书导读') show() }, 10000)
+    } else {
+      openSheet('全书导读', `${d.state === 'error' ? `<div class="muted">上次失败：${esc(d.error)}</div>` : ''}
+        <div class="muted">把整本书交给 Claude 读一遍，联网核书外事实，写出：来龙去脉、想干嘛、结构、独特之处、偏颇与争议、反响、和你的关系、留给你的问题。
+        书外事实都附来源，查不到标「未核」。一本书只生成一次（一本 30 万字的英文书约 2–3 美元、5–6 分钟，走你配置的 Claude API key）。</div>
+        <div class="row"><button class="primary" id="dos-go">生成导读</button></div>`)
+      $('#dos-go').onclick = async () => { await api(`/api/books/${bookId}/dossier`, {}); show() }
+    }
+  }
+  await show()
+}
+
 function onLoad({ detail: { doc, index } }) {
   trDocs.set(index, doc)
   $('#b-tr').classList.toggle('on', trOn)
   trSection(doc, index)
+  gloss.section(doc, index)
   if (isPDF) {
     docIndex.set(doc, index)
     drawPDFMarks(doc, index)
@@ -575,8 +629,41 @@ $('#s-ask').onclick = () => {
   }
 }
 
+// 地理批注（2026-10-09）：地名 → 历史地名库定位 → 地图 + 事实表 + 形势解说。存成 mode=geo 的提问记录。
+$('#s-geo').onclick = async () => {
+  if (!current) return
+  const sel = current
+  const cfi = view.getCFI(sel.index, sel.range)
+  const chapter = view.lastLocation?.tocItem?.label ?? ''
+  const ctx = selectionContext(sel)
+  openSheet('地理批注', `<div class="quote">${esc(sel.text)}</div>
+    <div id="geo-out"><div class="item"><span class="muted">正在抽地名、查历史地名库、写解说（约一分钟）……</span></div></div>`)
+  try {
+    const r = await api('/api/geo', { device, book_id: bookId, cfi, selection: sel.text, chapter,
+      context_before: ctx.before, context_after: ctx.after }) // 不指定后端：服务器用 OWN_READER_DEFAULT_BACKEND
+    const geo = { year: r.year, places: r.places }
+    if (!marks.has(cfi)) {
+      marks.set(cfi, { kind: 'ask', id: r.id, cfi, selection: sel.text, question: '地理批注', answer: r.answer, model: r.model, geo })
+      if (isPDF) { resolveMark(cfi); redrawPDF() }
+      else view.addAnnotation({ value: cfi })
+    }
+    const out = $('#geo-out')
+    if (!out) return // 等待期间 sheet 已关
+    out.innerHTML = `${geoMapHTML()}<div class="answer">${md(r.answer)}</div>
+      <div class="muted">${esc(r.model)} · ${(r.latency_ms / 1000).toFixed(0)} 秒</div>`
+    renderGeoMap(out, geo)
+  } catch (e) {
+    const out = $('#geo-out')
+    if (out) out.innerHTML = `<div class="item">出错了：${esc(e.message)}</div>`
+  }
+}
+
 function showMark(m) {
-  if (m.kind === 'ask') {
+  if (m.kind === 'ask' && m.geo) {
+    openSheet('地理批注', `<div class="quote">${esc(m.selection)}</div>
+      <div id="geo-out">${geoMapHTML()}<div class="answer">${md(m.answer)}</div><div class="muted">${esc(m.model)}</div></div>`)
+    renderGeoMap($('#geo-out'), m.geo)
+  } else if (m.kind === 'ask') {
     openSheet('之前的提问', `<div class="quote">${esc(m.selection)}</div>
       ${m.question ? `<div class="q">${esc(m.question)}</div>` : ''}
       <div class="muted">${esc(m.model)}</div><div class="answer">${md(m.answer)}</div>`)

@@ -19,7 +19,8 @@ from lxml import etree
 import app
 import translate
 
-TR_TAGS = {"p", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "dd", "dt", "figcaption"}
+# div 只取叶子块（2026-10-09 补：Calibre 转出来的书常把段落写成 <div class="paragraph">，之前整本不翻）
+TR_TAGS = {"p", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "dd", "dt", "figcaption", "div"}
 XHTML_NS = "http://www.w3.org/1999/xhtml"
 OUT_DIR = app.DATA_DIR / "bilingual"
 

@@ -70,3 +70,21 @@ def test_chain_follows_configured_order(monkeypatch):
 
 def test_default_chain_is_free_then_local():
     assert translate.CHAIN == ["mt_free", "mt_local"]
+
+
+def test_book_batch_and_handler(events, monkeypatch):
+    import batchjobs
+    sent = {}
+    monkeypatch.setattr(batchjobs.llm, "batch_submit", lambda items, model, effort, est_usd: sent.update(items=items, model=model) or "mb1")
+    monkeypatch.setattr(batchjobs, "ensure_poller", lambda bid: None)
+    paras = ["First English paragraph here.", "Second English paragraph here."]
+    r = translate.book_batch(5, paras)
+    assert r["blocks"] == 1 and sent["model"] == "claude-sonnet-5-5"
+    assert translate.request(paras)["pending"] == 0            # 批次在途，实时路径不重复派
+    assert translate.get([translate.h(p) for p in paras])["pending"] == 2
+    cid = sent["items"][0][0]
+    monkeypatch.setattr(batchjobs.llm, "batch_status", lambda bid: {"status": "ended"})
+    monkeypatch.setattr(batchjobs.llm, "batch_results", lambda bid: iter([(cid, "[1] 第一段\n[2] 第二段", None)]))
+    assert batchjobs.collect("mb1") == "ended"
+    done = translate.get([translate.h(p) for p in paras])
+    assert done["pending"] == 0 and [done["done"][translate.h(p)]["zh"] for p in paras] == ["第一段", "第二段"]

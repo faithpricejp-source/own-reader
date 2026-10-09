@@ -6,6 +6,7 @@
 - 后端顺序可用 OWN_READER_TRANSLATE_CHAIN 改。
 - 段落级缓存（按原文 sha1），同一段永不重翻；书本文是公开材料（sensitivity=public）。
 - 一节（EPUB 的一个 section）拆成小块并发翻：第一块很小，先出第一屏；其余每块约 BLOCK_WORDS 词。
+- 整本批量翻译（book_batch）走 Claude API 的 Message Batches，需配置 Anthropic API key，见下文。
 """
 from __future__ import annotations
 
@@ -207,8 +208,9 @@ def request(paras: list[str]) -> dict:
         return {"lang": "zh", "done": {}}
     hs = [h(p) for p in paras]
     have = cached(hs)
+    in_batch = _batch_hashes()
     with _inflight_lock:
-        todo = [p for p, x in zip(paras, hs) if x not in have and x not in _inflight]
+        todo = [p for p, x in zip(paras, hs) if x not in have and x not in _inflight and x not in in_batch]
         _inflight.update(h(p) for p in todo)
 
     def run(block):
@@ -224,9 +226,80 @@ def request(paras: list[str]) -> dict:
 
 
 def get(hashes: list[str]) -> dict:
+    in_batch = _batch_hashes()
     with _inflight_lock:
-        pending = sum(1 for x in hashes if x in _inflight)
+        pending = sum(1 for x in hashes if x in _inflight or x in in_batch)
     return {"done": cached(hashes), "pending": pending}
+
+
+# ---- 整本翻译走 Claude API 的 Message Batches（五折，通常一小时内出结果）----
+# 用 claude_api 后端的 key 与月上限（见 llm.py）；实时翻页仍走上面的 CHAIN，批次在途的段落实时路径不重复翻。
+BATCH_MODEL = "claude-sonnet-5-5"
+BATCH_WORDS = 1500
+
+
+def _batch_hashes() -> set[str]:
+    try:
+        import batchjobs
+        return {h(p) for r in batchjobs.pending("translate") for p in r["payload"]["paras"]}
+    except Exception:  # noqa: BLE001 — 没有作业表时不挡实时翻译
+        return set()
+
+
+def _on_batch(payload: dict, book_id: int, text: str | None, err: str | None) -> str:
+    if not text:
+        return f"error: {err}"
+    paras = payload["paras"]
+    res = parse(text, len(paras))
+    _store([(h(p), p, zh, BATCH_MODEL + ":batch") for p, zh in zip(paras, res) if zh])
+    miss = sum(1 for x in res if not x)
+    return "done" if not miss else f"done: {miss} missing"
+
+
+def book_batch(book_id: int, paras: list[str], limit: int | None = None) -> dict:
+    """把整本书还没翻的段落一次提交成 Batch。返回 {"lang", "blocks", "est"}。"""
+    import batchjobs
+    paras = [p.strip() for p in paras if p and p.strip()]
+    language = lang(paras)
+    if language is None:
+        return {"lang": "zh", "blocks": 0}
+    if batchjobs.pending("translate", book_id):
+        return {"lang": language, "blocks": 0, "note": "已有批次在途"}
+    have = cached([h(p) for p in paras])
+    with _inflight_lock:
+        todo = [p for p in dict.fromkeys(paras) if h(p) not in have and h(p) not in _inflight]
+    blks, cur, words = [], [], 0
+    for p in todo:
+        cur.append(p)
+        words += len(p.split())
+        if words >= BATCH_WORDS:
+            blks.append(cur)
+            cur, words = [], 0
+    if cur:
+        blks.append(cur)
+    blks = blks[:limit]
+    if not blks:
+        return {"lang": language, "blocks": 0}
+    stamp = time.strftime("%H%M%S")
+    system = f"{PROMPT[language]}\n{RULES}"
+    items = [(f"t{book_id}-{stamp}-{k}", system, "\n\n".join(f"[{i + 1}] {p}" for i, p in enumerate(b)), {"paras": b})
+             for k, b in enumerate(blks)]
+    # 估算：Sonnet 批量价 1/5 美元每百万 token；英文约 1.3 token/词，中文译文约 2.5 倍 token
+    words_total = sum(len(p.split()) for b in blks for p in b)
+    est = (words_total * 1.3 * 1.0 + words_total * 1.3 * 2.5 * 5.0) / 1e6
+    batchjobs.submit("translate", book_id, items, model=BATCH_MODEL, effort="low", est_usd=est)
+    return {"lang": language, "blocks": len(blks), "est": round(est, 2)}
+
+
+def _register() -> None:
+    try:
+        import batchjobs
+        batchjobs.register("translate", _on_batch)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+_register()
 
 
 if __name__ == "__main__":

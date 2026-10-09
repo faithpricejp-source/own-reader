@@ -99,6 +99,10 @@ class Cal:
 def isolate(tmp_path, monkeypatch):
     """Fresh reader.sqlite, fresh empty Calibre db, audit log in tmp_path."""
     monkeypatch.setattr(llm, "AUDIT_DB", tmp_path / "audit.sqlite")
+    # 保险：若 app 在 conftest 设好临时目录之前就被导入（比如先 import 再调 pytest.main），DATA_DIR 会指向真实
+    # 数据目录，下面的 unlink 就会删掉真库。删之前必须确认 DB_PATH 在测试临时目录里。
+    if _TMP_ROOT.resolve() not in app.DB_PATH.resolve().parents:
+        pytest.exit(f"拒绝运行：app.DB_PATH={app.DB_PATH} 不在测试临时目录 {_TMP_ROOT} 下（app 在 conftest 之前被导入了）", 2)
     app.DB_PATH.unlink(missing_ok=True)
     _reset_calibre()
     yield

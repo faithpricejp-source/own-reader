@@ -27,7 +27,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
-        webView.pageZoom = UserDefaults.standard.object(forKey: zoomKey) as? CGFloat ?? 1.0
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 1100),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
@@ -93,6 +92,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         decisionHandler(.allow)
     }
 
+    // 阅读页不能用整页缩放：WKWebView.pageZoom≠1 时 foliate 分栏的滚动位置会错开半页（2026-10-09 实测 1.4 倍时
+    // 左右各露半栏）。阅读页固定 1.0，⌘+/⌘- 改调阅读器字号；书架等其他页面照旧用整页缩放。
+    var isReader: Bool { webView.url?.path == "/read" }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        webView.pageZoom = isReader ? 1.0 : (UserDefaults.standard.object(forKey: zoomKey) as? CGFloat ?? 1.0)
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let t = webView.title, !t.isEmpty { window.title = t }
     }
@@ -110,9 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
           localStorage.setItem('own-reader-theme', t); location.reload(); })()
         """)
     }
-    @objc func zoomIn() { setZoom(webView.pageZoom + 0.1) }
-    @objc func zoomOut() { setZoom(webView.pageZoom - 0.1) }
-    @objc func zoomReset() { setZoom(1.0) }
+    func fontStep(_ d: Int) { webView.evaluateJavaScript("window.ownReaderFontStep && window.ownReaderFontStep(\(d))") }
+    @objc func zoomIn() { isReader ? fontStep(6) : setZoom(webView.pageZoom + 0.1) }
+    @objc func zoomOut() { isReader ? fontStep(-6) : setZoom(webView.pageZoom - 0.1) }
+    @objc func zoomReset() { isReader ? fontStep(0) : setZoom(1.0) }
     func setZoom(_ z: CGFloat) {
         webView.pageZoom = max(0.5, min(3.0, z))
         UserDefaults.standard.set(webView.pageZoom, forKey: zoomKey)

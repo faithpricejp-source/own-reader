@@ -11,6 +11,8 @@
 <meta name="theme-color" content="#ffffff">
 <script src="/vendor/marked.min.js"></script>
 <script src="/web/safe_md.js"></script>
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<script src="/vendor/leaflet/leaflet.js"></script>
 <style>
   html, body { height: 100%; overflow: hidden; }
   foliate-view { position: fixed; inset: 0; bottom: 34px; }
@@ -29,6 +31,7 @@
   :root[data-theme="desk"] #top button:hover { background: var(--line); }
   :root[data-large] #top, :root[data-large] #foot, :root[data-large] #selbar, :root[data-large] #sheet { zoom: 1.4; }
   #b-tr[hidden] { display: none; }
+  #b-gl.on { font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }
   #b-tr.on { font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }
 
   #selbar { position: fixed; z-index: 11; display: none; gap: 8px; }
@@ -73,6 +76,13 @@
   .badge { display: inline-block; font-size: 12px; color: var(--muted); }
   #hotzone { position: fixed; top: 0; left: 0; right: 0; height: 14px; z-index: 9; }
 
+  .geo-map { height: 320px; margin: 4px 0 6px; border: 1px solid var(--line); }
+  :root[data-theme="eink"] .geo-map { border-color: #000; filter: grayscale(1) contrast(1.15); }
+  /* #sheet 在大屏墨水屏上 zoom 1.4，Leaflet 的指针坐标会错位，地图反向缩回 1 */
+  :root[data-large] #sheet .geo-map { zoom: calc(1 / 1.4); height: 448px; }
+  .geo-legend { font-size: 12px; margin-bottom: 8px; }
+  .geo-tip { font-size: 12px; padding: 1px 4px; }
+
   #sr-bar { display: flex; gap: 8px; margin-bottom: 10px; }
   #sr-bar input { flex: 1; }
   #sr-bar button { min-width: 64px; }
@@ -94,11 +104,14 @@
     stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.8"/><line x1="15.6" y1="15.6" x2="21" y2="21"/></svg></button>
   <button id="b-notes">笔记</button>
   <button id="b-tr" title="外文书对照翻译" hidden>译</button>
+  <button id="b-dos" title="全书导读：来龙去脉、想干嘛、偏颇与争议、留给你的">导读</button>
+  <button id="b-gl" title="精读批注：背景、释义、存疑、双关、言外之意">批</button>
 </div>
 <div id="foot"><span id="chap"></span><span id="savefail"></span><span id="pct"></span></div>
 <div id="selbar">
   <button id="s-hl">划线</button>
   <button id="s-note">评注</button>
+  <button id="s-geo">地理</button>
   <button id="s-ask" class="primary">提问</button>
 </div>
 <div id="sheet">

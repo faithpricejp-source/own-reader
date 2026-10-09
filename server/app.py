@@ -198,7 +198,7 @@ def book_state(book_id: int) -> dict:
                          "question": p.get("question"), "answer": p.get("answer"),
                          "model": p.get("model"), "ts": r["ts"],
                          "pos": p.get("pos"), "pos_end": p.get("pos_end"), "pos_kind": p.get("pos_kind"),
-                         "chapter": p.get("chapter")})
+                         "chapter": p.get("chapter"), "geo": p.get("geo")})
     return {"progress": progress, "progress_xp": progress_xp, "highlights": list(highlights.values()), "asks": asks}
 
 
@@ -470,6 +470,28 @@ class Handler(BaseHTTPRequestHandler):
                 one = lambda k, d=None: (qs.get(k) or [d])[0]  # noqa: E731
                 return self._json(library_class.list_cat(one("primary", ""), one("secondary"), one("sort", "both"),
                                                          int(one("offset", "0"))))
+            if path == "/api/geo/pgn":
+                import geo
+                ids = [i for i in (qs.get("ids") or [""])[0].split(",") if i]
+                return self._json({"polygons": geo.polygons(ids)})
+            if path == "/api/gloss/profile":
+                import gloss
+                return self._json({"text": gloss.profile()})
+            m = re.fullmatch(r"/api/books/(\d+)/dossier", path)
+            if m:
+                import dossier
+                return self._json(dossier.get(int(m.group(1))) or {"state": "none"})
+            m = re.fullmatch(r"/api/books/(\d+)/chapters", path)
+            if m:
+                import chapters
+                return self._json(chapters.status(int(m.group(1))))
+            m = re.fullmatch(r"/api/gloss/book/(\d+)", path)
+            if m:
+                import gloss
+                f = book_file(int(m.group(1)))
+                if not f or f[1] != "epub":
+                    return self._json({"error": "只支持 EPUB"}, 404)
+                return self._json(gloss.book_status(int(m.group(1)), f[0]))
             if path == "/api/reading":
                 import reading_now
                 reading_now.refresh_if_stale()
@@ -482,7 +504,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not f or f[1] != "epub" or not f[0].exists():
                     return self._json({"error": "only EPUB books can be translated"}, 404)
                 if m.group(2):
-                    return self._json(bilingual.status(int(m.group(1)), f[0]))
+                    kick = (qs.get("kick") or ["1"])[0] != "0"
+                    return self._json(bilingual.status(int(m.group(1)), f[0], kick=kick))
                 out = bilingual.build(int(m.group(1)), f[0])
                 return self._send(200, out.read_bytes(), "application/epub+zip")
             m = re.fullmatch(r"/api/books/(\d+)/(file|state|cover)", path)
@@ -528,6 +551,81 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/translate/get":
                 import translate
                 return self._json(translate.get(req.get("hashes") or []))
+            if path == "/api/gloss":
+                # 精读批注：背景/释义/存疑/双关/言外，段落级缓存，见 server/gloss.py
+                import gloss
+                bid = int(req["book_id"])
+                return self._json(gloss.request(req.get("paras") or [], book_title(bid), bid))
+            if path == "/api/gloss/get":
+                import gloss
+                return self._json(gloss.get(req.get("hashes") or []))
+            if path == "/api/gloss/profile":
+                import gloss
+                gloss.PROFILE.write_text(str(req.get("text") or ""))
+                return self._json({"ok": True})
+            m = re.fullmatch(r"/api/books/(\d+)/dossier", path)
+            if m:
+                # 全书导读：整本书进 Opus 上下文 + 联网核书外事实（Claude API），见 server/dossier.py
+                import dossier
+                bid = int(m.group(1))
+                f = book_file(bid)
+                if not f or f[1] != "epub":
+                    return self._json({"error": "只支持 EPUB"}, 404)
+                with calibre() as c:
+                    r = c.execute(BOOK_SQL + " WHERE b.id=?", (bid,)).fetchone()
+                return self._json(dossier.start(bid, f[0], r["title"], r["authors"] or "", bool(req.get("force"))))
+            m = re.fullmatch(r"/api/books/(\d+)/translate_book", path)
+            if m:
+                # 整本对照翻译走 Claude API 的 Message Batches，见 translate.book_batch
+                import bilingual
+                import translate
+                bid = int(m.group(1))
+                f = book_file(bid)
+                if not f or f[1] != "epub":
+                    return self._json({"error": "只支持 EPUB"}, 404)
+                return self._json(translate.book_batch(bid, bilingual.paragraphs(f[0]), req.get("limit")))
+            m = re.fullmatch(r"/api/books/(\d+)/chapters", path)
+            if m:
+                # 每章导读，走 Message Batches，见 server/chapters.py
+                import chapters
+                bid = int(m.group(1))
+                f = book_file(bid)
+                if not f or f[1] != "epub":
+                    return self._json({"error": "只支持 EPUB"}, 404)
+                return self._json(chapters.start(bid, f[0], book_title(bid)))
+            m = re.fullmatch(r"/api/gloss/book/(\d+)/(start|stop)", path)
+            if m:
+                import gloss
+                bid = int(m.group(1))
+                f = book_file(bid)
+                if not f or f[1] != "epub":
+                    return self._json({"error": "只支持 EPUB"}, 404)
+                if m.group(2) == "stop":
+                    gloss.stop_book(bid)
+                    return self._json(gloss.book_status(bid, f[0]))
+                return self._json(gloss.start_book(bid, f[0], book_title(bid)))
+            if path == "/api/geo":
+                # 地理批注：事实表由 geo.py 从地名库生成，模型只抽地名、写形势解说。
+                # 后端与回退同选中提问：不指定用 OWN_READER_DEFAULT_BACKEND，失败时改用 OWN_READER_FALLBACK_BACKEND
+                import geo
+                bid = int(req["book_id"])
+                backend = req.get("backend") or llm.DEFAULT_BACKEND
+
+                def ask(messages, caller):
+                    try:
+                        return llm.ask(backend, messages, sensitivity="personal", caller=caller)
+                    except Exception:  # noqa: BLE001
+                        fb = llm.FALLBACK_BACKEND
+                        if backend != llm.DEFAULT_BACKEND or not fb or fb == backend:
+                            raise
+                        return llm.ask(fb, messages, sensitivity="personal", caller=caller + ".fallback")
+                res = geo.annotate(req, book_title(bid), ask)
+                eid = add_event(req.get("device"), bid, "ask", req.get("cfi"), req.get("selection"),
+                                {"question": "地理批注", "mode": "geo", "answer": res["answer"], "backend": backend,
+                                 "model": res["model"], "latency_ms": res["latency_ms"], "chapter": req.get("chapter"),
+                                 "geo": {"year": res["year"], "places": res["places"]},
+                                 **{k: req[k] for k in ("pos", "pos_end", "pos_kind", "client_ts") if req.get(k)}})
+                return self._json({"id": eid, **res})
             if path == "/api/ask":
                 bid = int(req["book_id"])
                 # 不指定后端时用 OWN_READER_DEFAULT_BACKEND；默认后端失败且配置了 OWN_READER_FALLBACK_BACKEND 时自动改用它
@@ -568,6 +666,14 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     init_db()
+    try:  # 服务器重启后，给还没收回的 Batch（精读批注、章导读、整本翻译）挂上轮询
+        import batchjobs
+        import chapters  # noqa: F401 — 导入即登记 Batch 处理函数
+        import gloss  # noqa: F401
+        import translate  # noqa: F401
+        batchjobs.resume()
+    except Exception as e:  # noqa: BLE001
+        print(f"batch resume failed: {e}", flush=True)
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"own-reader on http://127.0.0.1:{PORT}  db={DB_PATH}", flush=True)
     srv.serve_forever()

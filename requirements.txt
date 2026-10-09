@@ -2,3 +2,7 @@
 lxml          # 双语 EPUB（server/bilingual.py）
 fonttools     # 字体列表（/api/fonts）
 pytest        # 测试
+anthropic     # 可选：claude_api 后端（精读批注、全书/每章导读、整本批量翻译）
+# 以下只在建地理批注的地名库时用（server/geo_build.py），服务器运行时不需要：
+# pyshp
+# pyproj
