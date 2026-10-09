@@ -1,0 +1,12 @@
+# 运行时与本机文件
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
+logs/
+build/
+data/
+# 真实配置（示例见 config.example.conf）
+config.conf
+# pdf.js（13MB）未入库；需要 PDF 支持时从上游 foliate-js@78914ae 恢复到这里
+vendor/foliate-js/vendor/pdfjs/

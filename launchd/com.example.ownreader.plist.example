@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  own-reader 常驻服务的 launchd 示例。用法：
+  1. 把 __REPO__ 换成本仓库的绝对路径、__PYTHON__ 换成 python3 的绝对路径（如 /opt/homebrew/bin/python3）、
+     __LOGDIR__ 换成日志目录（如 ~/Library/Logs/own-reader，须先建好，写绝对路径）。
+  2. 复制到 ~/Library/LaunchAgents/com.example.ownreader.plist，然后
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.ownreader.plist
+  3. label 改了的话，macapp/Info.plist 的 OwnReaderLaunchdLabel 也要一起改。
+  每日荐书 / 书库评分增量也可以照这个格式各建一个：ProgramArguments 换成
+  server/recommend.py generate --if-stale 或 server/library_feedback.py refresh，去掉 KeepAlive，
+  加 StartCalendarInterval。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.example.ownreader</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>__REPO__/server/app.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>__LOGDIR__/server.log</string>
+  <key>StandardErrorPath</key><string>__LOGDIR__/server.log</string>
+</dict>
+</plist>

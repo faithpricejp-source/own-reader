@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>阅读</title>
+<script src="/web/theme.js"></script>
+<link rel="stylesheet" href="/web/style.css">
+<link rel="manifest" href="/web/manifest.json">
+<link rel="icon" href="/web/icon-192.png">
+<meta name="theme-color" content="#ffffff">
+<script src="/vendor/marked.min.js"></script>
+<script src="/web/safe_md.js"></script>
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  foliate-view { position: fixed; inset: 0; bottom: 34px; }
+  #foot { position: fixed; left: 0; right: 0; bottom: 0; height: 34px; padding: 7px 16px;
+    font-size: 13px; color: var(--muted); display: flex; justify-content: space-between; background: var(--bg); }
+  :root[data-theme="eink"] #foot { border-top: 1px solid #000; color: #333; }
+  #top { position: fixed; top: 0; left: 0; right: 0; background: var(--bg); z-index: 10; align-items: center;
+    display: none; gap: 8px; padding: 8px 12px; }
+  #top.show { display: flex; }
+  :root[data-theme="eink"] #top { border-bottom: 2px solid #000; }
+  :root[data-theme="desk"] #top { background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line); }
+  #top .title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: center;
+    font-family: var(--serif); font-size: 15px; }
+  :root[data-theme="desk"] #top button { border: none; background: transparent; min-height: 36px; padding: 6px 12px; border-radius: 8px; }
+  :root[data-theme="desk"] #top button:hover { background: var(--line); }
+  :root[data-large] #top, :root[data-large] #foot, :root[data-large] #selbar, :root[data-large] #sheet { zoom: 1.4; }
+  #b-tr[hidden] { display: none; }
+  #b-tr.on { font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }
+
+  #selbar { position: fixed; z-index: 11; display: none; gap: 8px; }
+  #selbar.show { display: flex; }
+  :root[data-theme="eink"] #selbar { left: 0; right: 0; bottom: 0; background: #fff; border-top: 2px solid #000; padding: 8px; }
+  :root[data-theme="eink"] #selbar button { flex: 1; }
+  :root[data-theme="desk"] #selbar { left: 50%; bottom: 52px; transform: translateX(-50%); background: var(--text);
+    padding: 6px; border-radius: 999px; box-shadow: 0 10px 30px rgba(0,0,0,.25); gap: 2px; }
+  :root[data-theme="desk"] #selbar button { background: transparent; color: var(--bg); border: none; border-radius: 999px;
+    min-height: 36px; padding: 6px 18px; }
+  :root[data-theme="desk"] #selbar button:hover { background: rgba(255,255,255,.14); }
+  :root[data-theme="desk"] #selbar button.primary { background: var(--accent); color: #fff; }
+
+  #sheet { position: fixed; z-index: 20; display: none; flex-direction: column; background: var(--surface); }
+  #sheet.show { display: flex; }
+  :root[data-theme="eink"] #sheet { left: 0; right: 0; bottom: 0; top: 18%; border-top: 3px solid #000; }
+  :root[data-theme="desk"] #sheet { top: 0; right: 0; bottom: 0; width: min(460px, 100%);
+    box-shadow: -12px 0 40px rgba(40,25,10,.16); border-left: 1px solid var(--line); }
+  #sheet header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  :root[data-theme="eink"] #sheet header { border-bottom-color: #000; }
+  #sheet header .h { flex: 1; font-weight: 600; font-family: var(--serif); font-size: 17px; }
+  :root[data-theme="desk"] #sheet header button { border: none; background: transparent; min-height: 32px; color: var(--muted); }
+  #sheet .body { flex: 1; overflow-y: auto; padding: 16px 20px 32px; line-height: 1.7; }
+  .quote { border-left: 3px solid var(--accent); padding: 4px 12px; margin: 0 0 14px; font-family: var(--serif); }
+  :root[data-theme="desk"] .quote { background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 0 8px 8px 0; padding: 10px 14px; }
+  .answer { margin: 10px 0; font-size: 15.5px; }
+  .answer h1, .answer h2, .answer h3 { font-size: 16px; margin: 16px 0 6px; font-family: var(--serif); }
+  .answer p { margin: 8px 0; }
+  .answer ul, .answer ol { padding-left: 1.3em; margin: 6px 0; }
+  .answer blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--line); color: var(--muted); font-family: var(--serif); }
+  .answer table { border-collapse: collapse; font-size: 14px; margin: 8px 0; display: block; overflow-x: auto; }
+  .answer th, .answer td { border: 1px solid var(--line); padding: 5px 8px; vertical-align: top; }
+  .answer hr { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  .row button { flex: 1; }
+  :root[data-theme="desk"] .row.models button { flex: none; min-height: 32px; padding: 4px 12px; font-size: 14px; border-radius: 999px; }
+  .item { border-bottom: 1px solid var(--line); padding: 12px 0; }
+  :root[data-theme="eink"] .item { border-bottom-color: #000; }
+  :root[data-theme="desk"] [data-href], :root[data-theme="desk"] [data-cfi] { cursor: pointer; }
+  :root[data-theme="desk"] [data-href]:hover, :root[data-theme="desk"] [data-cfi]:hover { color: var(--accent); }
+  .item .q { font-weight: 600; margin: 6px 0; }
+  .badge { display: inline-block; font-size: 12px; color: var(--muted); }
+  #hotzone { position: fixed; top: 0; left: 0; right: 0; height: 14px; z-index: 9; }
+
+  #sr-bar { display: flex; gap: 8px; margin-bottom: 10px; }
+  #sr-bar input { flex: 1; }
+  #sr-bar button { min-width: 64px; }
+  #top #b-search { display: inline-flex; align-items: center; }
+  .sr-item .snip { font-family: var(--serif); }
+  .sr-item .snip b { font-weight: 700; }
+  :root[data-theme="desk"] .sr-item .snip b { color: var(--accent); }
+  :root[data-theme="eink"] .sr-item .snip b { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div id="hotzone"></div>
+<div id="top">
+  <button id="b-home">‹ 书架</button>
+  <div class="title" id="title"></div>
+  <button id="b-font">Aa</button>
+  <button id="b-toc">目录</button>
+  <button id="b-search" aria-label="书内搜索" title="书内搜索"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.8"/><line x1="15.6" y1="15.6" x2="21" y2="21"/></svg></button>
+  <button id="b-notes">笔记</button>
+  <button id="b-tr" title="外文书对照翻译" hidden>译</button>
+</div>
+<div id="foot"><span id="chap"></span><span id="savefail"></span><span id="pct"></span></div>
+<div id="selbar">
+  <button id="s-hl">划线</button>
+  <button id="s-note">评注</button>
+  <button id="s-ask" class="primary">提问</button>
+</div>
+<div id="sheet">
+  <header><span class="h" id="sheet-h"></span><button id="sheet-x">关闭</button></header>
+  <div class="body" id="sheet-body"></div>
+</div>
+<script type="module" src="/web/reader.js"></script>
+</body>
+</html>

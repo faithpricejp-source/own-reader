@@ -1,0 +1,4 @@
+# 服务端核心只用标准库；以下为部分功能与测试所需
+lxml          # 双语 EPUB（server/bilingual.py）
+fonttools     # 字体列表（/api/fonts）
+pytest        # 测试

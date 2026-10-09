@@ -1,0 +1,159 @@
+/* 两套主题：eink（墨水屏，纯黑白、无动画、大触控区）与 desk（发光屏，暖纸色、衬线正文、封面墙）。 */
+:root {
+  --bg: #fff; --surface: #fff; --text: #000; --muted: #555; --line: #000; --accent: #000;
+  --radius: 0; --shadow: none; --border-w: 2px;
+  --ui: -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --serif: "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", serif;
+}
+:root[data-theme="desk"] {
+  --bg: #f4efe6; --surface: #fbf8f2; --text: #2a2622; --muted: #8a8178; --line: #e3dbcf; --accent: #a3302a;
+  --radius: 12px; --shadow: 0 1px 2px rgba(60,40,20,.06), 0 8px 24px rgba(60,40,20,.08); --border-w: 1px;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="desk"] {
+    --bg: #1c1a18; --surface: #252220; --text: #e8e2d9; --muted: #9a9187; --line: #3a3531; --accent: #e07a5f;
+    --shadow: 0 8px 24px rgba(0,0,0,.35);
+  }
+}
+
+* { box-sizing: border-box; }
+:root[data-theme="eink"] * { transition: none !important; animation: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--ui); font-size: 17px; }
+:root[data-theme="eink"] body { font-size: 18px; }
+button { font: inherit; color: var(--text); background: var(--surface); border: var(--border-w) solid var(--line);
+  border-radius: var(--radius); padding: 9px 14px; min-height: 44px; cursor: pointer; }
+:root[data-theme="eink"] button { border-color: #000; min-height: 48px; }
+:root[data-theme="desk"] button:hover { border-color: var(--muted); }
+button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+:root[data-theme="desk"] button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .45; cursor: default; }
+input, textarea { font: inherit; color: var(--text); background: var(--surface); border: var(--border-w) solid var(--line);
+  border-radius: var(--radius); padding: 10px 12px; width: 100%; outline: none; }
+:root[data-theme="eink"] input, :root[data-theme="eink"] textarea { border-color: #000; }
+:root[data-theme="desk"] input:focus, :root[data-theme="desk"] textarea:focus { border-color: var(--accent); }
+a { color: inherit; }
+.muted { color: var(--muted); font-size: 14px; }
+
+/* ---------- 书架 ---------- */
+.lib { max-width: 1180px; margin: 0 auto; padding: 16px 20px 60px; }
+.lib header { display: flex; align-items: center; gap: 16px; margin: 6px 0 18px; }
+.lib h1 { font-family: var(--serif); font-size: 26px; margin: 0; flex: none; }
+.lib header form { flex: 1; max-width: 520px; position: relative; }
+.qhist { position: absolute; left: 0; right: 0; top: 100%; z-index: 20; margin-top: 4px; background: var(--surface); border: 1px solid var(--line); }
+.qhist a { display: block; padding: 10px 14px; cursor: pointer; border-top: 1px solid var(--line); }
+.qhist a:first-child { border-top: 0; }
+.qhist a:hover { background: var(--bg); }
+:root[data-theme="desk"] .lib header input { border-radius: 999px; padding-left: 18px; background: var(--surface); }
+.lib h2 { font-size: 15px; letter-spacing: .08em; color: var(--muted); font-weight: 600; margin: 28px 0 12px; }
+:root[data-theme="eink"] .lib h2 { color: #000; border-bottom: 2px solid #000; padding-bottom: 4px; letter-spacing: 0; }
+
+/* eink：列表 */
+:root[data-theme="eink"] .grid { display: block; }
+:root[data-theme="eink"] .card { display: block; padding: 12px 2px; border-bottom: 1px solid #000; text-decoration: none; }
+:root[data-theme="eink"] .card .cover, :root[data-theme="eink"] .card .bar { display: none; }
+:root[data-theme="eink"] .card .t { font-size: 18px; }
+:root[data-theme="eink"] .card.noepub { color: #888; }
+
+/* desk：封面墙 */
+:root[data-theme="desk"] .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 26px 22px; }
+:root[data-theme="desk"] .grid.recent { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); }
+:root[data-theme="desk"] .card { text-decoration: none; display: flex; flex-direction: column; gap: 8px; }
+:root[data-theme="desk"] .cover { aspect-ratio: 2 / 3; border-radius: 4px 8px 8px 4px; overflow: hidden;
+  background: linear-gradient(145deg, #e9dfcf, #d8cab4); box-shadow: var(--shadow); position: relative;
+  transition: transform .15s ease, box-shadow .15s ease; }
+:root[data-theme="desk"] .cover::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 6px;
+  background: linear-gradient(90deg, rgba(0,0,0,.18), rgba(0,0,0,0)); }
+:root[data-theme="desk"] .cover img { width: 100%; height: 100%; object-fit: cover; display: block; position: relative; z-index: 1; }
+:root[data-theme="desk"] .cover .ph { position: absolute; inset: 0; padding: 14px 12px; display: flex; align-items: flex-end;
+  font-family: var(--serif); font-size: 15px; line-height: 1.35; color: #5a4a36; }
+:root[data-theme="desk"] .card:hover .cover { transform: translateY(-3px); box-shadow: 0 2px 4px rgba(60,40,20,.08), 0 16px 32px rgba(60,40,20,.14); }
+:root[data-theme="desk"] .card .t { font-size: 14px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden; }
+:root[data-theme="desk"] .card .muted { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:root[data-theme="desk"] .card.noepub { opacity: .5; cursor: default; }
+:root[data-theme="desk"] .bar { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+:root[data-theme="desk"] .bar i { display: block; height: 100%; background: var(--accent); }
+
+/* ---------- 标签页 / 读过 / 笔记 ---------- */
+.tabs { display: flex; gap: 4px; flex: none; }
+.tabs a { text-decoration: none; font-family: var(--serif); font-size: 22px; padding: 4px 10px; color: var(--muted); }
+.tabs a.on { color: var(--text); font-weight: 700; }
+:root[data-theme="eink"] .tabs a.on { text-decoration: underline; text-underline-offset: 6px; }
+:root[data-theme="desk"] .tabs a.on { box-shadow: inset 0 -3px 0 var(--accent); }
+.stats { display: flex; gap: 14px; margin: 8px 0 4px; flex-wrap: wrap; }
+.stats div { flex: 1; min-width: 120px; padding: 14px 16px; background: var(--surface); border: var(--border-w) solid var(--line);
+  border-radius: var(--radius); display: flex; flex-direction: column; }
+.stats b { font-size: 28px; font-family: var(--serif); }
+.stats span { color: var(--muted); font-size: 13px; }
+.hrow { display: flex; gap: 14px; align-items: center; padding: 12px 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
+:root[data-theme="eink"] .hrow { border-bottom-color: #000; }
+:root[data-theme="desk"] .hrow:hover { background: var(--surface); }
+.hrow .mini { width: 46px; flex: none; }
+.hrow .mini .cover { box-shadow: 0 1px 3px rgba(0,0,0,.18); border-radius: 2px 4px 4px 2px; }
+.hrow .mini .cover .ph { font-size: 8px; padding: 4px; }
+.hmain { flex: 1; min-width: 0; }
+.hmain .t { font-size: 16px; }
+.hdate { flex: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chip { font-size: 12px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
+:root[data-theme="eink"] .chip { border-color: #000; color: #000; border-radius: 0; }
+.note { padding: 14px 0; border-bottom: 1px solid var(--line); line-height: 1.7; }
+:root[data-theme="eink"] .note { border-bottom-color: #000; }
+.notes { max-width: 820px; }
+.quote { border-left: 3px solid var(--accent); padding: 4px 12px; margin: 8px 0; font-family: var(--serif); }
+:root[data-theme="desk"] .quote { background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 0 8px 8px 0; padding: 10px 14px; }
+.answer p { margin: 6px 0; }
+.btn { display: inline-block; text-decoration: none; padding: 9px 16px; border: var(--border-w) solid var(--line); border-radius: var(--radius); }
+.btn.primary { background: var(--text); color: var(--bg); }
+:root[data-theme="desk"] .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.modal { position: fixed; inset: 0; display: none; z-index: 30; background: rgba(0,0,0,.35); }
+:root[data-theme="eink"] .modal { background: transparent; }
+.modal.show { display: flex; justify-content: flex-end; }
+.modal-card { background: var(--surface); width: min(560px, 100%); height: 100%; display: flex; flex-direction: column; }
+:root[data-theme="desk"] .modal-card { box-shadow: -12px 0 40px rgba(0,0,0,.2); }
+:root[data-theme="eink"] .modal-card { border-left: 3px solid #000; }
+.modal-card header { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+.modal-card header .h { flex: 1; font-family: var(--serif); font-size: 18px; font-weight: 600; }
+.modal-body { flex: 1; overflow-y: auto; padding: 8px 22px 40px; }
+.modal-body h3 { font-size: 15px; color: var(--muted); margin: 22px 0 4px; }
+.field { display: block; margin: 14px 0; font-size: 15px; }
+.field select, .field input[type=range] { display: block; width: 100%; margin-top: 6px; }
+.field select { font: inherit; padding: 9px 10px; color: var(--text); background: var(--surface);
+  border: var(--border-w) solid var(--line); border-radius: var(--radius); }
+:root[data-theme="eink"] .field select { border-color: #000; }
+@media (max-width: 640px) {
+  .lib header { flex-wrap: wrap; }
+  .lib header form { flex-basis: 100%; max-width: none; }
+}
+
+/* ---------- 荐书 ---------- */
+.rec-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin: 6px 0 4px; }
+.recs { display: grid; gap: 18px; margin-top: 10px; }
+:root[data-theme="desk"] .recs { grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); }
+.rec { display: flex; gap: 18px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+:root[data-theme="eink"] .rec { border-bottom-color: #000; }
+:root[data-theme="desk"] .rec { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); }
+.rec-cover { width: 110px; flex: none; }
+.rec-main { flex: 1; min-width: 0; }
+.rec-main .t { font-family: var(--serif); font-size: 19px; font-weight: 600; }
+.hook { margin: 8px 0 4px; font-weight: 500; }
+.reason { line-height: 1.7; color: var(--text); margin: 6px 0; }
+.chip.on { border-color: var(--accent); color: var(--accent); }
+:root[data-theme="eink"] .chip.on { background: #000; color: #fff; }
+.chip.warn { border-color: #c0392b; color: #c0392b; }
+.fb { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.fb .verdicts button { flex: none; min-height: 34px; padding: 4px 12px; font-size: 14px; }
+:root[data-theme="desk"] .fb .verdicts button { border-radius: 999px; }
+.fb-cm { font-size: 14px; padding: 8px 10px; }
+.cats { margin: 6px 0 10px; }
+.cats .chip { cursor: pointer; font-size: 13px; padding: 4px 10px; }
+:root[data-theme="desk"] .card .score { color: var(--accent); letter-spacing: 1px; }
+:root[data-theme="desk"] .card .reason { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.libitem { display: flex; flex-direction: column; gap: 6px; }
+.libfb { display: flex; flex-wrap: wrap; gap: 4px; }
+.libfb button { font-size: 11.5px; padding: 2px 6px; }
+.libfb .cm { width: 100%; font-size: 12px; padding: 3px 6px; }
+
+/* 大屏墨水屏：书架页整体放大（阅读页正文字号走 Aa 面板，默认值见 reader.js） */
+:root[data-large] .lib, :root[data-large] .modal-card { zoom: 1.4; }

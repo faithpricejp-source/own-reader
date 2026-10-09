@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>讀書</title>
+<script src="/web/theme.js"></script>
+<link rel="stylesheet" href="/web/style.css">
+<link rel="manifest" href="/web/manifest.json">
+<link rel="icon" href="/web/icon-192.png">
+<meta name="theme-color" content="#ffffff">
+<script src="/vendor/marked.min.js"></script>
+<script src="/web/safe_md.js"></script>
+</head>
+<body>
+<div class="lib">
+  <header>
+    <nav class="tabs">
+      <a href="#reading" data-tab="reading">在读</a>
+      <a href="#shelf" data-tab="shelf">书架</a>
+      <a href="#history" data-tab="history">读过</a>
+      <a href="#notes" data-tab="notes">笔记</a>
+      <a href="#recs" data-tab="recs">荐书</a>
+    </nav>
+    <form id="f"><input id="q" type="search" autocomplete="off"><div id="qh" class="qhist" hidden></div></form>
+  </header>
+  <div id="view"></div>
+</div>
+<div id="modal" class="modal"><div class="modal-card">
+  <header><span class="h" id="modal-h"></span><button id="modal-x">关闭</button></header>
+  <div class="modal-body" id="modal-body"></div>
+</div></div>
+<script type="module">
+const $ = s => document.querySelector(s)
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+const desk = window.OWN_READER_THEME === 'desk'
+// Kimi-1: 非 2xx 也要抛（服务器失败响应是合法 JSON，只 r.json() 会把失败当成功），与 reader.js 的 api() 对齐
+const api = async p => { const r = await fetch(p); const j = await r.json(); if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`); return j }
+const day = t => (t || '').slice(0, 10)
+const SRC = { weread: '微信读书', 'reading-log': '阅读日志', 'own-reader': '本 App' }
+const PLACEHOLDER = { reading: '筛选在读的书', shelf: '搜书名或作者（Calibre 全库）', history: '筛选读过的书', notes: '搜笔记、划线、书名', recs: '' }
+const device = (() => { try { return localStorage.getItem('own-reader-device') || 'web' } catch { return 'web' } })()
+// Kimi-1: 写接口失败必须抛出，调用方只在真的成功后才给「已记录/已保存」的确认
+const post = async (p, body) => {
+  const r = await fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const j = await r.json()
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
+  return j
+}
+// Kimi-1: 视图加载失败/写入失败都要给用户看得见的提示
+const viewErr = e => { $('#view').innerHTML = `<p class="muted">加载失败：${esc(e.message || String(e))}（切到别的标签再切回来可重试）</p>`; console.error(e) }
+const fail = (box, e) => {
+  if (!box) return console.error(e)
+  box.querySelector('.failmsg')?.remove()
+  box.insertAdjacentHTML('beforeend', `<div class="muted failmsg">没存上：${esc(e.message || String(e))}</div>`)
+  console.error(e)
+}
+
+const cover = (id, title) => desk
+  ? `<div class="cover"><div class="ph">${esc(title)}</div>${id ? `<img loading="lazy" src="/api/books/${id}/cover" alt="" onerror="this.remove()">` : ''}</div>`
+  : ''
+const bar = f => f != null ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''
+const card = b => {
+  const inner = `${cover(b.id, b.title)}${bar(b.fraction)}<div class="t">${esc(b.title)}</div><div class="muted">${esc(b.authors)}${b.epub || b.pdf ? '' : ' · 暂无 EPUB/PDF'}${b.fraction != null && !desk ? ` · 读到 ${Math.round(b.fraction * 100)}%` : ''}</div>`
+  return b.epub || b.pdf ? `<a class="card" href="/read?id=${b.id}">${inner}</a>` : `<div class="card noepub">${inner}</div>`
+}
+
+// 书架：分类按钮（两级类目）+ 面向我的分：想读 / 用得上 / 应该读
+const cat = { p: null, s: null, sort: 'both' }
+const SORT_LABEL = { both: '综合', want: '按想读', need: '按用得上', should: '按应该读' }
+const stars = n => '★'.repeat(n) + '☆'.repeat(5 - n)
+const libCard = b => {
+  const inner = `${cover(b.id, b.title)}<div class="t">${esc(b.title)}</div><div class="muted">${esc(b.authors)}</div>
+    <div class="muted score">想读 ${stars(b.want)}</div><div class="muted score">用得上 ${stars(b.need)}</div>
+    ${b.should ? `<div class="muted score">应该读 ${stars(b.should)}</div>` : ''}${b.known ? `<div class="muted">${b.known === 2 ? '早知道' : '部分早知道'}</div>` : ''}
+    ${b.read ? `<div class="muted">${esc(b.read)}</div>` : ''}${b.reason ? `<div class="muted reason" title="${esc(b.reason)}">${esc(b.reason)}</div>` : ''}
+    ${b.epub || b.pdf ? '' : '<div class="muted">暂无 EPUB/PDF，打不开</div>'}`
+  const link = b.epub || b.pdf ? `<a class="card" href="/read?id=${b.id}">${inner}</a>` : `<div class="card noepub">${inner}</div>`
+  // 反馈：和荐书同一套按钮；记下当时的预测分，用来看推荐有没有变准
+  const fb = `<div class="libfb" data-id="${b.id}" data-pred='${esc(JSON.stringify({ want: b.want, need: b.need, should: b.should }))}'>
+    ${VERDICTS.map(([v, l]) => `<button data-v="${v}" class="${b.fb?.verdict === v ? 'primary' : ''}">${l}</button>`).join('')}
+    <input class="cm" placeholder="为什么？（可不写）" value="${esc(b.fb?.comment || '')}"></div>`
+  return `<div class="libitem">${link}${fb}</div>`
+}
+async function shelf(q) {
+  if (q) {
+    const r = await api('/api/books?q=' + encodeURIComponent(q))
+    $('#view').innerHTML = `<h2>搜索结果</h2><div class="grid">${r.books.map(card).join('') || '<p class="muted">没有找到</p>'}</div>`
+    return
+  }
+  const { cats } = await api('/api/library/cats')
+  const cur = cats.find(c => c.name === cat.p)
+  const chips = `<div class="chips cats">${cats.map(c => `<a class="chip ${c.name === cat.p ? 'on' : ''}" data-p="${esc(c.name)}">${esc(c.name)} ${c.n}</a>`).join('')}</div>`
+    + (cur ? `<div class="chips cats"><a class="chip ${!cat.s ? 'on' : ''}" data-s="">全部</a>${cur.subs.map(x => `<a class="chip ${x.name === cat.s ? 'on' : ''}" data-s="${esc(x.name)}">${esc(x.name)} ${x.n}</a>`).join('')}</div>
+      <div class="chips cats">${Object.entries(SORT_LABEL).map(([k, l]) => `<a class="chip ${cat.sort === k ? 'on' : ''}" data-sort="${k}">${l}</a>`).join('')}</div>` : '')
+  if (!cur) {
+    const r = await api('/api/books?q=')
+    $('#view').innerHTML = chips + (cats.length ? '' : '<p class="muted">还没分类（正在跑）。</p>')
+      + `<h2>最近入库</h2><div class="grid">${r.books.map(card).join('')}</div>`
+  } else {
+    $('#view').innerHTML = chips + `<div id="lib"></div><div class="row"><button id="more" hidden>再来 60 本</button></div>`
+    let offset = 0
+    const load = async () => {
+      const r = await api(`/api/library?primary=${encodeURIComponent(cat.p)}&secondary=${encodeURIComponent(cat.s || '')}&sort=${cat.sort}&offset=${offset}`)
+      if (!offset) $('#lib').innerHTML = `<p class="muted">${r.total} 本。星级只对你：想读看阅读史和反馈，用得上看「我眼下的需要」，应该读看「我觉得应该读的书」（经典/反方/补盲区）。综合排序会扣掉早知道的。</p><div class="grid"></div>`
+      $('#lib .grid').insertAdjacentHTML('beforeend', r.books.map(libCard).join(''))
+      offset += r.books.length
+      $('#more').hidden = offset >= r.total
+    }
+    $('#more').onclick = () => load().catch(e => fail($('#lib'), e)) // Kimi-1
+    await load()
+    $('#lib').onclick = async e => {
+      const btn = e.target.closest('.libfb button')
+      if (!btn) return
+      const box = btn.closest('.libfb')
+      try {
+        await post('/api/events', { device, type: 'book_feedback', payload: {
+          calibre_id: Number(box.dataset.id), verdict: btn.dataset.v, comment: box.querySelector('.cm').value.trim() || null,
+          pred: JSON.parse(box.dataset.pred) } })
+      } catch (e) { fail(box, e); return } // Kimi-1: 没存上就别把按钮翻成已选
+      box.querySelectorAll('button').forEach(b => b.classList.toggle('primary', b === btn))
+    }
+    $('#lib').onchange = async e => {
+      const box = e.target.closest('.libfb')
+      const on = box?.querySelector('button.primary')
+      if (!on) return  // 先点按钮再写理由；只写理由不点按钮不记
+      try {
+        await post('/api/events', { device, type: 'book_feedback', payload: {
+          calibre_id: Number(box.dataset.id), verdict: on.dataset.v, comment: e.target.value.trim() || null,
+          pred: JSON.parse(box.dataset.pred) } })
+      } catch (err) { fail(box, err) } // Kimi-1
+    }
+  }
+  $('#view').querySelectorAll('.cats .chip').forEach(el => el.onclick = () => {
+    if (el.dataset.p !== undefined) { cat.p = cat.p === el.dataset.p ? null : el.dataset.p; cat.s = null }
+    if (el.dataset.s !== undefined) cat.s = el.dataset.s || null
+    if (el.dataset.sort) cat.sort = el.dataset.sort
+    shelf('').catch(viewErr) // Kimi-1
+  })
+}
+
+const FROM = { weread: '微信读书', 'own-reader': '本 App', 'reading-log': '阅读日志' }
+const readingCard = b => {
+  const pic = desk ? (b.id ? cover(b.id, b.title)
+    : `<div class="cover"><div class="ph">${esc(b.title)}</div>${b.cover_url ? `<img loading="lazy" src="${esc(b.cover_url)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</div>`) : ''
+  const pct = b.fraction ? ` · ${Math.round(b.fraction * 100)}%` : ''
+  const inner = `${pic}${bar(b.fraction || null)}<div class="t">${esc(b.title)}</div>
+    <div class="muted">${esc(b.authors || '')}</div><div class="muted">${esc(b.last_day)}${pct} · ${b.sources.map(s => FROM[s] || s).join('、')}${b.epub || b.pdf ? '' : ' · 本 App 打不开'}</div>${b.other_editions?.length ? `<div class="muted">另一版：${esc(b.other_editions.join('、'))}</div>` : ''}`
+  if (b.epub || b.pdf) return `<a class="card" href="/read?id=${b.id}">${inner}</a>`
+  return b.weread_url ? `<a class="card" href="${esc(b.weread_url)}" target="_blank">${inner}</a>` : `<div class="card noepub">${inner}</div>`
+}
+async function readingView(q) {
+  const r = await api('/api/reading')
+  const list = r.books.filter(b => !q || `${b.title} ${b.authors}`.toLowerCase().includes(q.toLowerCase()))
+  $('#view').innerHTML = `<p class="muted">最近 60 天读过、还没读完的书，按最后阅读时间排。微信读书和本 App 合计读满 1 小时才算，中文版和外文版的时间合并计算。</p>`
+    + `<div class="grid recent">${list.map(readingCard).join('') || '<p class="muted">没有</p>'}</div>`
+}
+
+let historyCache
+async function historyView(q) {
+  historyCache ||= (await api('/api/history')).books
+  const list = historyCache.filter(h => !q || `${h.title} ${h.author}`.toLowerCase().includes(q.toLowerCase()))
+  const byYear = {}
+  for (const h of list) (byYear[(h.last_ts || '未知').slice(0, 4)] ||= []).push(h)
+  const finished = historyCache.filter(h => h.status === 'finished').length
+  const notes = historyCache.reduce((s, h) => s + h.highlights + h.thoughts, 0)
+  $('#view').innerHTML = `<div class="stats"><div><b>${historyCache.length}</b><span>本书有记录</span></div><div><b>${finished}</b><span>本读完</span></div><div><b>${notes}</b><span>条划线与想法</span></div></div>`
+    + Object.keys(byYear).sort().reverse().map(y => `<h2>${y}</h2><div class="hist">${byYear[y].map(h => `
+      <div class="hrow" data-key="${esc(h.key)}">
+        ${desk ? `<div class="mini">${cover(h.calibre_id, h.title)}</div>` : ''}
+        <div class="hmain">
+          <div class="t">${esc(h.title)}</div>
+          <div class="muted">${esc(h.author || '')}</div>
+          <div class="chips">${h.sources.map(s => `<span class="chip">${SRC[s.source] || s.source}${s.status === 'finished' ? ' · 读完' : ''}</span>`).join('')}
+            ${h.highlights ? `<span class="chip">${h.highlights} 划线</span>` : ''}${h.thoughts ? `<span class="chip">${h.thoughts} 想法</span>` : ''}</div>
+        </div>
+        <div class="muted hdate">${day(h.last_ts)}</div>
+      </div>`).join('')}</div>`).join('')
+  $('#view').onclick = e => {
+    const row = e.target.closest('.hrow')
+    if (row) openBook(historyCache.find(h => h.key === row.dataset.key)).catch(viewErr) // Kimi-1
+  }
+}
+
+const noteHtml = (n, withBook) => `<div class="note">
+  ${withBook ? `<div class="muted">${esc(n.title)} · ${SRC[n.source] || n.source}${n.chapter ? ' · ' + esc(n.chapter) : ''} · ${day(n.created_ts)}</div>` : `<div class="muted">${n.chapter ? esc(n.chapter) + ' · ' : ''}${day(n.created_ts)}</div>`}
+  ${n.quote ? `<div class="quote">${esc(n.quote)}</div>` : ''}
+  ${n.text ? `<div class="answer">${globalThis.marked ? marked.parse(esc(n.text), { breaks: true }) : esc(n.text)}</div>` : ''}
+</div>`
+
+async function openBook(h) {
+  let notes, loadFail = ''
+  try {
+    const parts = await Promise.all(h.sources.filter(s => s.source === 'weread').map(s =>
+      api(`/api/notes?source=weread&book=${encodeURIComponent(s.id)}`)))
+    notes = parts.flatMap(p => p.notes)
+  } catch (e) { notes = []; loadFail = `<p class="muted">笔记载入失败：${esc(e.message || String(e))}</p>` } // Kimi-1
+  const rwm = h.sources.filter(s => s.source === 'reading-log')
+  $('#modal-h').textContent = h.title
+  $('#modal-body').innerHTML = `
+    <div class="muted">${esc(h.author || '')}</div>
+    <div class="row">${h.epub || h.pdf ? `<a class="btn primary" href="/read?id=${h.calibre_id}">打开阅读</a>` : '<span class="muted">Calibre 里没有对应 EPUB/PDF</span>'}</div>
+    ${rwm.length ? `<p class="muted">阅读日志里登记过这本书。</p>` : ''}
+    <h3>微信读书笔记（${notes.length}）</h3>
+    ${loadFail || notes.map(n => noteHtml(n, false)).join('') || '<p class="muted">没有</p>'}`
+  $('#modal').classList.add('show')
+}
+$('#modal-x').onclick = () => $('#modal').classList.remove('show')
+$('#modal').onclick = e => { if (e.target.id === 'modal') $('#modal').classList.remove('show') }
+
+async function notesView(q) {
+  const r = await api('/api/notes?q=' + encodeURIComponent(q))
+  $('#view').innerHTML = `<h2>${q ? `「${esc(q)}」的笔记` : '最近的笔记'}（${r.notes.length}${r.notes.length >= 500 ? '+' : ''}）</h2>`
+    + `<div class="notes">${r.notes.map(n => noteHtml(n, true)).join('') || '<p class="muted">没有</p>'}</div>`
+}
+
+const VERDICTS = [['love', '很对胃口'], ['want', '想读'], ['read', '读过了'], ['no', '不感兴趣'], ['wrong_reason', '书行，理由不对']]
+const VERDICT_CN = Object.fromEntries(VERDICTS)
+let recPoll
+async function recsView() {
+  clearTimeout(recPoll)
+  const r = await api('/api/recs')
+  const b = r.batch
+  const recCover = x => desk ? `<div class="cover"><div class="ph">${esc(x.title)}</div>${x.calibre_id
+    ? `<img src="/api/books/${x.calibre_id}/cover" onerror="this.remove()">` : x.cover ? `<img src="${esc(x.cover)}" onerror="this.remove()">` : ''}</div>` : ''
+  const avail = x => x.calibre_id ? `<a class="btn primary" href="/read?id=${x.calibre_id}">库里有 · 打开</a>`
+    : x.verified === 'weread' ? '<span class="chip">库里没有 · 微信读书书城有</span>'
+    : x.verified === 'openlibrary' ? '<span class="chip">库里没有 · 已在 Open Library 查到</span>'
+    : x.verified === 'ndl' ? '<span class="chip">库里没有 · 已在国立国会图书馆查到</span>'
+    : '<span class="chip warn">书城和图书目录都没查到，请留意书名是否准确</span>'
+  $('#q').style.visibility = 'hidden'
+  $('#view').innerHTML = `
+    <div class="rec-head">
+      <div>${b ? `<b>第 ${r.batches} 批</b> · ${day(b.created_ts)} · ${esc(b.model || '')}` : '还没有推荐'}
+        ${b?.note ? `<div class="muted">${esc(b.note)}</div>` : ''}</div>
+      <div class="row"><button id="rec-new" class="primary" ${r.running ? 'disabled' : ''}>${r.running === 'generate' ? '正在生成…（约 1–3 分钟）' : '换一批'}</button>
+        <button id="rec-memo">偏好备忘</button></div>
+    </div>
+    ${r.error ? `<p class="muted">上次出错：${esc(r.error)}</p>` : ''}
+    <div class="recs">${r.recs.map(x => `
+      <div class="rec" data-id="${x.id}">
+        ${desk ? `<div class="rec-cover">${recCover(x)}</div>` : ''}
+        <div class="rec-main">
+          <div class="t">${esc(x.title)}</div>
+          <div class="muted">${esc(x.author || '')}${x.year ? ' · ' + esc(x.year) : ''}</div>
+          <div class="chips"><span class="chip on">${esc(x.reason_type || '')}</span></div>
+          ${x.hook ? `<div class="hook">${esc(x.hook)}</div>` : ''}
+          <div class="reason">${esc(x.reason || '')}</div>
+          <div class="row">${avail(x)}</div>
+          <div class="fb">
+            <div class="row verdicts">${VERDICTS.map(([v, l]) => `<button data-v="${v}" class="${x.feedback?.verdict === v ? 'primary' : ''}">${l}</button>`).join('')}</div>
+            <input class="fb-cm" placeholder="为什么？写了理由，AI 才学得准（可不写）" value="${esc(x.feedback?.comment || '')}">
+            ${x.feedback ? `<div class="muted">已记录：${VERDICT_CN[x.feedback.verdict] || x.feedback.verdict}${x.feedback.comment ? '，' + esc(x.feedback.comment) : ''}</div>` : ''}
+          </div>
+        </div>
+      </div>`).join('')}</div>
+    ${b ? `<h2>对这批推荐说两句</h2><textarea id="rec-cm" rows="3" placeholder="整体好不好、想要更多什么、少一点什么"></textarea>
+    <div class="row"><button id="rec-cm-go">提交</button></div>` : ''}`
+  $('#rec-new').onclick = async () => {
+    try { await post('/api/recs/generate', {}) } catch (e) { fail($('#view').querySelector('.rec-head'), e); return } // Kimi-1
+    recsView().catch(viewErr)
+  }
+  $('#rec-memo').onclick = () => openMemo(r.memo, r.running)
+  $('#rec-cm-go') && ($('#rec-cm-go').onclick = async () => {
+    const text = $('#rec-cm').value.trim()
+    if (!text) return
+    const btn = $('#rec-cm-go')
+    try { await post('/api/events', { device, type: 'rec_comment', text }) } catch (e) { fail(btn.parentElement, e); return } // Kimi-1: 只有真的存上了才说「已记录」
+    $('#rec-cm').value = ''
+    btn.textContent = '已记录，下次推荐会参考'
+  })
+  $('#view').onclick = async e => {
+    const btn = e.target.closest('.verdicts button')
+    if (!btn) return
+    const card = btn.closest('.rec')
+    const comment = card.querySelector('.fb-cm').value.trim()
+    try {
+      await post('/api/events', { device, type: 'rec_feedback', payload: { rec_id: Number(card.dataset.id), verdict: btn.dataset.v, comment } })
+    } catch (err) { fail(card.querySelector('.fb'), err); return } // Kimi-1
+    recsView().catch(viewErr)
+  }
+  if (r.running) recPoll = setTimeout(() => recsView().catch(viewErr), 5000) // Kimi-1
+}
+function openMemo(memo, running) {
+  $('#modal-h').textContent = '推荐偏好备忘'
+  $('#modal-body').innerHTML = `
+    <p class="muted">每次荐书都会遵守这份备忘。它由 AI 根据你写明的反馈理由总结（不替你猜理由），你也可以直接改。</p>
+    <textarea id="memo" rows="16">${esc(memo)}</textarea>
+    <div class="row"><button id="memo-save" class="primary">保存我的修改</button>
+      <button id="memo-ai" ${running ? 'disabled' : ''}>让 AI 根据反馈重写</button></div>`
+  $('#modal').classList.add('show')
+  $('#memo-save').onclick = async () => {
+    try { await post('/api/recs/memo', { device, text: $('#memo').value }) } catch (e) { fail($('#memo-save').parentElement, e); return } // Kimi-1
+    $('#memo-save').textContent = '已保存'
+  }
+  $('#memo-ai').onclick = async () => {
+    try { await post('/api/recs/distill', {}) } catch (e) { fail($('#memo-ai').parentElement, e); return } // Kimi-1
+    $('#memo-ai').textContent = '在重写，约一分钟后重新打开看'
+    $('#memo-ai').disabled = true
+  }
+}
+
+const VIEWS = { reading: readingView, shelf, history: historyView, notes: notesView, recs: recsView }
+function route() {
+  const tab = (location.hash.slice(1) || 'reading')
+  document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab))
+  $('#q').placeholder = PLACEHOLDER[tab]
+  $('#q').value = ''
+  $('#q').style.visibility = ''
+  $('#qh').hidden = true
+  clearTimeout(recPoll)
+  $('#view').onclick = null
+  ;(VIEWS[tab] || readingView)('').catch(viewErr) // Kimi-1: GET 失败不再静默留下空白区域
+}
+// 搜索历史：存在事件库（跨设备共用），点搜索框时列出本标签页最近搜过的词，点一下直接再搜
+const curTab = () => location.hash.slice(1) || 'reading'
+let qhist = []
+function runSearch(q) {
+  $('#qh').hidden = true
+  if (q) post('/api/events', { device, type: 'search', text: q, payload: { tab: curTab() } }).catch(() => {})
+  ;(VIEWS[curTab()] || readingView)(q).catch(viewErr) // Kimi-1
+}
+function showHist() {
+  const v = $('#q').value.trim().toLowerCase()
+  const hits = qhist.filter(x => x.toLowerCase().includes(v) && x.toLowerCase() !== v)
+  $('#qh').innerHTML = hits.map(x => `<a data-q="${esc(x)}">${esc(x)}</a>`).join('')
+  $('#qh').hidden = !hits.length
+}
+$('#q').addEventListener('focus', async () => {
+  try { qhist = (await api('/api/searches?tab=' + curTab())).queries } catch { qhist = [] }
+  if (document.activeElement === $('#q')) showHist()
+})
+$('#q').addEventListener('input', showHist)
+$('#q').addEventListener('blur', () => setTimeout(() => { $('#qh').hidden = true }, 150))
+// pointerdown 而不是 click：要赶在输入框 blur 收起列表之前
+$('#qh').addEventListener('pointerdown', e => {
+  const a = e.target.closest('a[data-q]')
+  if (!a) return
+  e.preventDefault()
+  $('#q').value = a.dataset.q
+  $('#q').blur()
+  runSearch(a.dataset.q)
+})
+$('#f').addEventListener('submit', e => {
+  e.preventDefault()
+  $('#q').blur()
+  runSearch($('#q').value.trim())
+})
+window.addEventListener('hashchange', route)
+route()
+</script>
+</body>
+</html>
