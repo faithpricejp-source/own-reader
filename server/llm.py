@@ -4,7 +4,8 @@ free   — OpenRouter :free models, tried in FREE_MODELS order. Key read from OW
 local  — any OpenAI-compatible server (llama.cpp / LM Studio / Ollama / vLLM …) at OWN_READER_LOCAL_LLM_URL.
 claude — the official `claude -p` CLI in headless mode; no tools except web search.
 claude_api — the Claude API via the official `anthropic` SDK (key file OWN_READER_ANTHROPIC_KEY_FILE), with a local
-         spend ledger and monthly cap (OWN_READER_API_MONTHLY_CAP); also Message Batches for whole-book jobs.
+         spend ledger and a cap per credit period (OWN_READER_API_MONTHLY_CAP, OWN_READER_CREDIT_DAY);
+         also Message Batches for whole-book jobs.
 grok / kimi / gemini — those vendors' official CLIs in non-interactive mode (grok -p, kimi -p, agy -p), run in an
          empty working dir. One user-triggered question per call. Every CLI path can be overridden by env var.
 No API keys live in this repo; each backend uses whatever credentials its own CLI / key file already has.
@@ -112,14 +113,37 @@ def ask_claude(messages: list[dict]) -> tuple[str, str]:
 # ---- Claude API（claude_api 后端；精读批注、全书/每章导读、整本批量翻译用）----
 # 官方 SDK（pip install anthropic），调用时才导入：SDK 没装或依赖坏了只让这个后端失败，服务器照常起，调用方可回落。
 # key 从 OWN_READER_ANTHROPIC_KEY_FILE 读（文件里只放 key 一行）。系统提示打 cache_control。
-# 每次调用按挂牌价把估算花费记进本地账本 api_spend，当月超过 API_MONTHLY_CAP 就拒绝调用。
+# 每次调用按挂牌价把估算花费记进本地账本 api_spend，本额度周期超过 API_MONTHLY_CAP 就拒绝调用。
+# 周期起点是每月 CREDIT_DAY 日 0 点（UTC）。CREDIT_DAY 来自 OWN_READER_CREDIT_DAY，默认 1，即自然月。
 # 这是本地估算，不是官方账单（API 没有查余额的接口）；价格按 2026-10 的官方价目表，变了就改 API_PRICE。
 API_KEY_FILE = Path(os.environ.get("OWN_READER_ANTHROPIC_KEY_FILE", "~/.config/anthropic/api-key.txt")).expanduser()
 API_MODEL = os.environ.get("OWN_READER_API_MODEL", "claude-opus-5-5")
 API_PRICE = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0),
              "claude-haiku-5-5": (0.10, 0.50)}  # 每百万 token 美元：输入、输出；缓存写 1.25×，读按各型号表
 API_CACHE_READ = {"claude-opus-5-5": 0.20, "claude-sonnet-5-5": 0.20}  # 每百万；未列的按 0.1× 输入价
-API_MONTHLY_CAP = float(os.environ.get("OWN_READER_API_MONTHLY_CAP", "20"))  # 美元/月，按本地账本估算
+API_MONTHLY_CAP = float(os.environ.get("OWN_READER_API_MONTHLY_CAP", "20"))  # 美元/额度周期，按本地账本估算
+
+
+def _credit_day() -> int:
+    """每月几号算新周期。只接受 1–28，非法值退回 1（自然月）。"""
+    try:
+        day = int(os.environ.get("OWN_READER_CREDIT_DAY", "1"))
+    except ValueError:
+        return 1
+    return day if 1 <= day <= 28 else 1
+
+
+CREDIT_DAY = _credit_day()
+
+
+def credit_period_start(now=None) -> str:
+    """本额度周期的起点（最近一个 CREDIT_DAY 日 0 点，UTC），格式同账本 ts。"""
+    from datetime import datetime, timezone
+    now = now or datetime.now(timezone.utc)
+    y, m = now.year, now.month
+    if now.day < CREDIT_DAY:
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    return f"{y:04d}-{m:02d}-{CREDIT_DAY:02d}T00:00:00Z"
 
 
 def _spend_db():
@@ -135,10 +159,14 @@ def _spend_db():
 
 
 def api_spent(month: str | None = None) -> float:
+    """本额度周期已花的估算美元。传 month（YYYY-MM）则按自然月统计，供报表用。"""
     try:
         with _spend_db() as c:
-            r = c.execute("SELECT COALESCE(SUM(usd),0) FROM api_spend WHERE month=?",
-                          (month or time.strftime("%Y-%m"),)).fetchone()
+            if month:
+                r = c.execute("SELECT COALESCE(SUM(usd),0) FROM api_spend WHERE month=?", (month,)).fetchone()
+            else:
+                r = c.execute("SELECT COALESCE(SUM(usd),0) FROM api_spend WHERE ts>=?",
+                              (credit_period_start(),)).fetchone()
         return float(r[0])
     except Exception:  # noqa: BLE001
         return float("inf")  # 账本读不了就当已超限，宁可不调
@@ -159,10 +187,11 @@ def api_cost(model: str, u: dict) -> float:
 
 def api_call(system: str, user: str, *, model: str = API_MODEL, effort: str = "medium",
              tools: list | None = None, betas: list | None = None) -> tuple[str, str, float]:
-    """返回 (正文, 模型, 估算美元)。超当月上限、拒答、截断、空答都抛 BackendError。"""
+    """返回 (正文, 模型, 估算美元)。超本额度周期上限、拒答、截断、空答都抛 BackendError。"""
     spent = api_spent()
     if spent >= API_MONTHLY_CAP:
-        raise BackendError(f"本月 API 估算花费 {spent:.2f} 美元，已到上限 {API_MONTHLY_CAP:.0f}，停用到下月")
+        raise BackendError(
+            f"本额度周期 API 估算花费 {spent:.2f} 美元，已到上限 {API_MONTHLY_CAP:.0f}，停用到下个 {CREDIT_DAY} 日")
     try:
         import anthropic
     except Exception as e:  # noqa: BLE001
@@ -211,10 +240,10 @@ def _client():
 
 def batch_submit(items: list[tuple[str, str, str]], *, model: str = API_MODEL, effort: str = "medium",
                  est_usd: float = 0.0) -> str:
-    """items = [(custom_id, system, user)]。预估花费超当月剩余额度就拒绝提交。返回 batch id。"""
+    """items = [(custom_id, system, user)]。预估花费超本额度周期剩余额度就拒绝提交。返回 batch id。"""
     spent = api_spent()
     if spent + est_usd > API_MONTHLY_CAP:
-        raise BackendError(f"本月已花 {spent:.2f} 美元，这批预估 {est_usd:.2f}，会超上限 {API_MONTHLY_CAP:.0f}")
+        raise BackendError(f"本额度周期已花 {spent:.2f} 美元，这批预估 {est_usd:.2f}，会超上限 {API_MONTHLY_CAP:.0f}")
     from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
     from anthropic.types.messages.batch_create_params import Request
     reqs = [Request(custom_id=cid, params=MessageCreateParamsNonStreaming(

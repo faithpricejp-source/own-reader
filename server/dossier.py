@@ -133,7 +133,7 @@ def build(book_id: int, epub, title: str, authors: str) -> dict:
     tokens = len(text) / (1.5 if _dense(text) else 2.6)
     est = tokens * 7.6 / 1e6 + 0.3
     if llm.api_spent() + est > llm.API_MONTHLY_CAP:
-        raise llm.BackendError(f"本月 API 估算已花 {llm.api_spent():.2f} 美元，这本书导读预估 {est:.2f}，会超上限")
+        raise llm.BackendError(f"本额度周期 API 估算已花 {llm.api_spent():.2f} 美元，这本书导读预估 {est:.2f}，会超上限")
     client = llm._client()
     system = f"{PROMPT}\n\n【读者画像】\n{gloss.profile()}"
     ctx = _context(book_id)

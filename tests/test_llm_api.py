@@ -212,3 +212,27 @@ def test_batch_results_bills_each_item_once_even_if_reread_or_interrupted(monkey
     assert len(_ledger()) == 3
     list(llm.batch_results("mb"))
     assert len(_ledger()) == 3
+
+
+def test_credit_period_starts_on_configured_day(monkeypatch):
+    """周期起点是最近一个 CREDIT_DAY 日 0 点（UTC）。默认日是 1（自然月）；这里用另一个日子测跨月和跨年。"""
+    from datetime import datetime, timezone
+    at = lambda s: datetime.fromisoformat(s).replace(tzinfo=timezone.utc)  # noqa: E731
+    monkeypatch.setattr(llm, "CREDIT_DAY", 15)
+    assert llm.credit_period_start(at("2026-10-09T12:00:00")) == "2026-09-15T00:00:00Z"
+    assert llm.credit_period_start(at("2026-10-15T00:00:01")) == "2026-10-15T00:00:00Z"
+    assert llm.credit_period_start(at("2026-01-05T00:00:00")) == "2025-12-15T00:00:00Z"
+    monkeypatch.setattr(llm, "CREDIT_DAY", 1)
+    assert llm.credit_period_start(at("2026-10-09T12:00:00")) == "2026-10-01T00:00:00Z"
+    assert llm.credit_period_start(at("2026-01-01T00:00:00")) == "2026-01-01T00:00:00Z"
+
+
+def test_api_spent_counts_current_credit_period_not_calendar_month(monkeypatch):
+    """上限按额度周期算：周期起点之前的花费不算，跨自然月但落在本期内的花费都算。"""
+    with llm._spend_db() as c:
+        for ts, usd in [("2026-09-14T23:00:00.000Z", 50.0), ("2026-09-20T00:00:00.000Z", 3.0),
+                        ("2026-10-09T00:00:00.000Z", 4.0)]:
+            c.execute("INSERT INTO api_spend(month, ts, model, usd, usage) VALUES (?,?,?,?,?)",
+                      (ts[:7], ts, "x", usd, "{}"))
+    monkeypatch.setattr(llm, "credit_period_start", lambda now=None: "2026-09-15T00:00:00Z")
+    assert llm.api_spent() == 7.0
