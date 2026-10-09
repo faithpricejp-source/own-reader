@@ -332,3 +332,18 @@ def test_book_state_crengine_highlight_carries_position(events):
     hl = app.book_state(5)["highlights"][0]
     assert hl["id"] == h and hl["cfi"] is None and hl["pos"] == "/p[1].0" and hl["pos_end"] == "/p[1].12"
     assert hl["pos_kind"] == "crengine" and hl["chapter"] == "序"
+
+
+def test_book_state_links_crengine_note_and_delete_by_pos(events):
+    """安卓原生版不知道服务器事件号：评注按 pos/pos_end 挂回划线，delete 按 pos/pos_end 删掉当时那条划线。"""
+    xp = {"pos": "/p[2].0", "pos_end": "/p[2].9", "pos_kind": "crengine"}
+    h1 = app.add_event("android-x", 5, "highlight", None, "原文一", {**xp, "chapter": "序"})
+    app.add_event("android-x", 5, "note", None, "我的评注", {**xp, "quote": "原文一"})
+    other = app.add_event("android-x", 5, "highlight", None, "别处", {"pos": "/p[3].0", "pos_end": "/p[3].4", "pos_kind": "crengine"})
+    st = app.book_state(5)
+    assert {h["id"]: h["note"] for h in st["highlights"]} == {h1: "我的评注", other: None}
+    app.add_event("android-x", 5, "delete", None, "原文一", dict(xp))
+    assert [h["id"] for h in app.book_state(5)["highlights"]] == [other]
+    # 删了以后在同一位置重新划：新划线不受先前 delete 影响
+    h2 = app.add_event("android-x", 5, "highlight", None, "原文一", dict(xp))
+    assert sorted(h["id"] for h in app.book_state(5)["highlights"]) == sorted([other, h2])

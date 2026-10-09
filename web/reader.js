@@ -223,8 +223,11 @@ async function main() {
   const state = await api(`/api/books/${bookId}/state`)
   document.title = state.title
   $('#title').textContent = state.title
-  // 安卓 crengine 版留下的划线没有 cfi（只有 xpointer），网页版画不了，跳过
-  for (const h of state.highlights) if (h.cfi) marks.set(h.cfi, { kind: 'hl', ...h })
+  // 安卓 crengine 版留下的划线没有 cfi（只有 xpointer）：各节载入时按原文找到位置再画（placeXpHighlights）
+  for (const h of state.highlights) {
+    if (h.cfi) marks.set(h.cfi, { kind: 'hl', ...h })
+    else if (h.pos_kind === 'crengine' && h.text) xpPending.push(h)
+  }
   for (const a of state.asks) if (a.cfi && !marks.has(a.cfi)) marks.set(a.cfi, { kind: 'ask', ...a })
 
   const blob = await fetch(`/api/books/${bookId}/file`).then(r => {
@@ -412,8 +415,46 @@ $('#b-dos').onclick = async () => {
   await show()
 }
 
+// ---- 安卓原生版的划线：按原文在本节里找位置，换成 cfi 再画 ----
+// xpointer 的 DocFragment[k] 是那份 EPUB 的第 k 个 spine 文档；导读版多插了一页，序号可能错一位，
+// 所以序号对上的节里任何长度都认，别的节里只认 8 个字以上的原文（太短容易认错地方）。
+const xpPending = []
+const xpResolved = new Map() // 划线事件号 -> cfi（笔记列表跳转用）
+function placeXpHighlights(doc, index) {
+  if (!xpPending.length) return
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+    acceptNode: n => n.parentElement?.closest('.or-tr, .or-gl, .or-ink') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  })
+  let flat = ''
+  const map = [] // flat 里每个字 -> [节点, 节点内偏移]；去掉所有空白，两边换行/缩进不同也能对上
+  for (let n; (n = walker.nextNode());) {
+    const t = n.nodeValue
+    for (let i = 0; i < t.length; i++) if (!/\s/.test(t[i])) { flat += t[i]; map.push([n, i]) }
+  }
+  for (let k = xpPending.length - 1; k >= 0; k--) {
+    const h = xpPending[k]
+    const needle = h.text.replace(/\s+/g, '')
+    const frag = +(/DocFragment\[(\d+)\]/.exec(h.pos || '')?.[1] || 0)
+    if (!needle || (frag - 1 !== index && needle.length < 8)) continue
+    const at = flat.indexOf(needle)
+    if (at < 0) continue
+    const range = doc.createRange()
+    const [sn, so] = map[at], [en, eo] = map[at + needle.length - 1]
+    range.setStart(sn, so)
+    range.setEnd(en, eo + 1)
+    try {
+      const cfi = view.getCFI(index, range)
+      marks.set(cfi, { kind: 'hl', ...h, cfi })
+      xpResolved.set(h.id, cfi)
+      xpPending.splice(k, 1)
+      view.addAnnotation({ value: cfi })
+    } catch (e) { console.warn('xp highlight', e) }
+  }
+}
+
 function onLoad({ detail: { doc, index } }) {
   trDocs.set(index, doc)
+  placeXpHighlights(doc, index)
   $('#b-tr').classList.toggle('on', trOn)
   trSection(doc, index)
   gloss.section(doc, index)
@@ -787,7 +828,7 @@ $('#b-search').onclick = () => {
 $('#b-notes').onclick = async () => {
   const s = await api(`/api/books/${bookId}/state`)
   const rows = [
-    ...s.highlights.map(h => ({ ts: h.ts, cfi: h.cfi, html: `<div class="quote">${esc(h.text)}</div>${h.note ? `<div>${esc(h.note)}</div>` : ''}` })),
+    ...s.highlights.map(h => ({ ts: h.ts, cfi: h.cfi || xpResolved.get(h.id) || '', html: `${h.pos_kind === 'crengine' ? '<div class="muted">Boox</div>' : ''}<div class="quote">${esc(h.text)}</div>${h.note ? `<div>${esc(h.note)}</div>` : ''}` })),
     ...s.asks.map(a => ({ ts: a.ts, cfi: a.cfi, html: `<div class="quote">${esc(a.selection)}</div><div class="q">问：${esc(a.question || '解释这段')}</div><div class="answer">${md(a.answer)}</div><div class="muted">${esc(a.model)}</div>` })),
     ...(s.imported || []).map(n => ({ ts: n.created_ts || '', cfi: '', html: `<div class="muted">${n.source === 'weread' ? '微信读书' : esc(n.source)}${n.chapter ? ' · ' + esc(n.chapter) : ''}</div>${n.quote ? `<div class="quote">${esc(n.quote)}</div>` : ''}${n.text ? `<div class="answer">${md(n.text)}</div>` : ''}` })),
   ].sort((a, b) => b.ts.localeCompare(a.ts))

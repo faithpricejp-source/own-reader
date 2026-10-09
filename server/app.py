@@ -153,6 +153,10 @@ def book_format(book_id: int) -> str | None:
     return pick_format(r) if r else None
 
 
+def _same_xp(h: dict, p: dict) -> bool:
+    return h.get("pos_kind") == "crengine" and h.get("pos") == p.get("pos") and h.get("pos_end") == p.get("pos_end")
+
+
 def book_state(book_id: int) -> dict:
     with db() as c:
         rows = c.execute("SELECT * FROM events WHERE book_id=? ORDER BY id", (book_id,)).fetchall()
@@ -184,6 +188,10 @@ def book_state(book_id: int) -> dict:
                 progress_xp = {**p, "ts": r["ts"]}
             elif r["cfi"]:
                 progress = {"cfi": r["cfi"], **p, "ts": r["ts"]}
+        elif r["type"] == "delete" and isinstance(p, dict) and p.get("pos_kind") == "crengine" and "target_id" not in p:
+            # 安卓原生版删划线：设备不知道事件号，按位置删掉此刻同位置的划线（之后重划的不受影响）
+            for hid in [k for k, h in highlights.items() if _same_xp(h, p)]:
+                del highlights[hid]
         elif r["type"] == "highlight":
             highlights[r["id"]] = {"id": r["id"], "cfi": r["cfi"], "text": r["text"],
                                    "color": p.get("color", "yellow"), "note": None, "ts": r["ts"],
@@ -191,6 +199,9 @@ def book_state(book_id: int) -> dict:
                                    "chapter": p.get("chapter")}
         elif r["type"] == "note":
             h = highlights.get(p.get("highlight_id"))
+            if h is None and p.get("pos_kind") == "crengine":
+                # 安卓原生版的评注不带 highlight_id，按位置挂到同位置最新的那条划线上
+                h = next((x for x in reversed(highlights.values()) if _same_xp(x, p)), None)
             if h:
                 h["note"] = r["text"]
         elif r["type"] == "ask":
