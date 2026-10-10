@@ -157,3 +157,25 @@ def test_claude_engine_uses_configured_model(tmp_path, monkeypatch):
     assert text == "转写" and source == "claude-haiku-5-5"
     assert seen["model"] == "claude-haiku-5-5"
     assert seen["user"][0]["type"] == "image" and seen["user"][0]["source"]["media_type"] == "image/png"
+
+
+def test_manual_correction_during_recognition_is_preserved(events, monkeypatch):
+    _ink()
+    def engine(png, context):
+        app.add_event("android-x", 5, "note", text="手改正确文字",
+                      payload={"ink_id": "ink-1", "source": "manual"})
+        return "后台错误文字", "fake-local"
+    monkeypatch.setattr(ink, "_engine", lambda: engine)
+    assert ink.recognize_pending() == 0
+    k = app.book_state(5)["inks"][0]
+    assert k["recognized"] == "手改正确文字" and k["recognized_source"] == "manual"
+
+
+def test_delete_during_recognition_does_not_write_stale_note(events, monkeypatch):
+    _ink()
+    def engine(png, context):
+        app.add_event("android-x", 5, "delete", payload={"ink_id": "ink-1"})
+        return "后台文字", "fake-local"
+    monkeypatch.setattr(ink, "_engine", lambda: engine)
+    assert ink.recognize_pending() == 0
+    assert app.book_state(5)["inks"] == []

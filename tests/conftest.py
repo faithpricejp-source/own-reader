@@ -36,6 +36,7 @@ sys.path.insert(0, str(SERVER))
 
 import app  # noqa: E402
 import llm  # noqa: E402
+import translate  # noqa: E402
 
 CALIBRE_DB = CALIBRE_DIR / "metadata.db"
 
@@ -99,6 +100,10 @@ class Cal:
 def isolate(tmp_path, monkeypatch):
     """Fresh reader.sqlite, fresh empty Calibre db, audit log in tmp_path."""
     monkeypatch.setattr(llm, "AUDIT_DB", tmp_path / "audit.sqlite")
+    def external_backend(*args, **kwargs):
+        raise AssertionError("external backend must be explicitly replaced in tests")
+    for name in llm.BACKENDS:
+        monkeypatch.setitem(llm.BACKENDS, name, external_backend)
     # 保险：若 app 在 conftest 设好临时目录之前就被导入（比如先 import 再调 pytest.main），DATA_DIR 会指向真实
     # 数据目录，下面的 unlink 就会删掉真库。删之前必须确认 DB_PATH 在测试临时目录里。
     if _TMP_ROOT.resolve() not in app.DB_PATH.resolve().parents:

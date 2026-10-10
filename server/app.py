@@ -89,6 +89,21 @@ def recent_searches(tab: str, limit: int = 8) -> list[str]:
     return [r["text"] for r in rows]
 
 
+def save_ink_recognition(ink: dict, text: str, source: str) -> bool:
+    """只对仍是最新事件的手写写回；手改、删除或新笔迹使旧识别结果失效。"""
+    with _db_lock, db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        latest = c.execute("SELECT id FROM events WHERE book_id IS ? AND type IN ('ink','note','delete') "
+                           "AND json_valid(payload) AND json_extract(payload,'$.ink_id')=? "
+                           "ORDER BY id DESC LIMIT 1", (ink["book_id"], ink["ink_id"])).fetchone()
+        if not latest or latest["id"] != ink["id"]:
+            return False
+        c.execute("INSERT INTO events(device,book_id,type,text,payload) VALUES(?,?,'note',?,?)",
+                  ("ink", ink["book_id"], text,
+                   json.dumps({"ink_id": ink["ink_id"], "source": source}, ensure_ascii=False)))
+    return True
+
+
 def calibre() -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{CALIBRE_ROOT / 'metadata.db'}?mode=ro", uri=True, timeout=10)
     conn.row_factory = sqlite3.Row

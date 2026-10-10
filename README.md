@@ -182,3 +182,8 @@ own-reader is a single-user, self-hosted reading app: it serves your Calibre lib
 ## 许可证
 
 GPL-3.0，见 [LICENSE](LICENSE)。`vendor/foliate-js` 为 MIT（见其目录下 LICENSE），`vendor/marked.min.js` 为 MIT（见文件头），`vendor/leaflet` 为 BSD-2-Clause（见其目录下 LICENSE）。地图瓦片来自 OpenStreetMap / OpenTopoMap（CC-BY-SA）与 Esri，按其各自条款使用。CHGIS、Pleiades 数据不在本仓库内，各按其许可。
+
+
+## 2026-10-10 fixes
+
+Preserve manual handwriting edits and deletions made while recognition is running. Tests block unmocked model backends. Regression: 244 tests passed.

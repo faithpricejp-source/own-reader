@@ -180,8 +180,8 @@ def recognize_pending(limit: int = 20) -> int:
             text, source = eng(png, p["context"])
         if not text:
             continue
-        app.add_event("ink", p["book_id"], "note", None, text, {"ink_id": p["ink_id"], "source": source})
-        n += 1
+        if app.save_ink_recognition(p, text, source):
+            n += 1
     return n
 
 
